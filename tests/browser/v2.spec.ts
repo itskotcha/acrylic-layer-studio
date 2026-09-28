@@ -13,6 +13,7 @@ async function boot(page: any) {
   await page.goto("/");
   await page.getByRole("button", { name: "กลับไปดูงานในสตูดิโอ" }).click();
   await expect(page.getByTestId("editor").locator("canvas")).toBeVisible();
+  await page.locator(".import-block summary").click();
 }
 async function snapshot(page: any) {
   return page.evaluate(async () => {
@@ -53,7 +54,9 @@ test("v2 backgrounds, 4K resolution, same pixels across UI themes and layer expo
     const s = useStudio.getState();
     return (await flatCanvas(s.project, s.assets, 1024)).toDataURL();
   });
+  await page.getByRole("button", { name: "ตั้งค่า", exact: true }).click();
   await page.getByLabel("ธีม", { exact: true }).selectOption("dark");
+  await page.getByRole("button", { name: "ปิดตั้งค่า", exact: true }).click();
   const b = await page.evaluate(async () => {
     const { useStudio } = await import("/src/store.ts");
     const { flatCanvas } = await import("/src/raster.ts");
@@ -89,7 +92,9 @@ test("v2 backgrounds, 4K resolution, same pixels across UI themes and layer expo
   await page.screenshot({ path: info.outputPath("dark-background.png") });
   await page.reload();
   await expect(page.getByLabel("ธีม", { exact: true })).toHaveValue("dark");
+  await page.getByRole("button", { name: "ตั้งค่า", exact: true }).click();
   await page.getByLabel("ธีม", { exact: true }).selectOption("system");
+  await page.getByRole("button", { name: "ปิดตั้งค่า", exact: true }).click();
   await page.emulateMedia({ colorScheme: "light" });
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await page.emulateMedia({ colorScheme: "dark" });
@@ -239,9 +244,13 @@ test("six real brush renders, partial eraser preserves image, transform masks an
     };
   });
   expect(roundtrip.after).toBe(roundtrip.before);
+  await page.getByRole("button", { name: "ตั้งค่า", exact: true }).click();
   await page.getByLabel("ธีม", { exact: true }).selectOption("light");
+  await page.getByRole("button", { name: "ปิดตั้งค่า", exact: true }).click();
   await page.screenshot({ path: info.outputPath("brushes-light.png") });
+  await page.getByRole("button", { name: "ตั้งค่า", exact: true }).click();
   await page.getByLabel("ธีม", { exact: true }).selectOption("dark");
+  await page.getByRole("button", { name: "ปิดตั้งค่า", exact: true }).click();
   await page.waitForTimeout(200);
   await page.screenshot({ path: info.outputPath("brushes-dark.png") });
 });
@@ -392,7 +401,9 @@ test("custom font embedded, autosave, missing font resolution and corrupt font r
     .getByRole("dialog")
     .getByRole("button", { name: "เปิดโปรเจกต์", exact: true })
     .click();
-  expect((await snapshot(page)).layers[0].objects[0].fontFamily).toBe("Mali");
+  await expect
+    .poll(async () => (await snapshot(page)).layers[0].objects[0].fontFamily)
+    .toBe("Mali");
   await page.locator(".object-list button").first().click();
   await page.getByTestId("font-input").setInputFiles({
     name: "broken.woff2",
@@ -409,11 +420,11 @@ test("legacy project migrates assets intact and 3D render exports selected 2K wi
   await page
     .getByTestId("project-input")
     .setInputFiles("examples/legacy-v1.acrylic.zip");
-  await expect(page.getByText("75 × 100", { exact: true })).toBeVisible();
+  await expect(page.locator(".canvas-meta")).toContainText("75 × 100");
   const p = await snapshot(page);
   expect(p.schemaVersion).toBe(2);
   expect(p.layers).toHaveLength(3);
-  await page.getByRole("button", { name: "พรีวิว 3D", exact: true }).click();
+  await page.getByRole("button", { name: "ดูแบบ 3D", exact: true }).click();
   await expect(page.getByTestId("preview").locator("canvas")).toBeVisible();
   await page.waitForTimeout(1800);
   await page
@@ -500,7 +511,7 @@ test("touch gestures cancel drawing, hand pan preserves artwork and snapping sta
   });
   expect((await snapshot(page)).layers[0].objects).toHaveLength(0);
   await page.getByTitle("พอดีหน้าจอ").click();
-  await page.getByRole("button", { name: "เลื่อนพื้นที่ · Space" }).click();
+  await page.getByRole("button", { name: "เลื่อนผืนงาน" }).click();
   const b = (await page.getByTestId("editor").boundingBox())!;
   await page.mouse.move(b.x + b.width * 0.5, b.y + b.height * 0.5);
   await page.mouse.down();
@@ -555,7 +566,9 @@ test("touch gestures cancel drawing, hand pan preserves artwork and snapping sta
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByTitle("พอดีหน้าจอ").click();
   await page.getByRole("button", { name: "เครื่องมือ / ชั้น" }).click();
+  await page.getByRole("button", { name: "ตั้งค่า", exact: true }).click();
   await page.getByLabel("ธีม", { exact: true }).selectOption("dark");
+  await page.getByRole("button", { name: "ปิดตั้งค่า", exact: true }).click();
   await page.getByRole("button", { name: "ปิดเครื่องมือ" }).click();
   await page.waitForTimeout(200);
   await page.screenshot({ path: info.outputPath("mobile-dark.png") });

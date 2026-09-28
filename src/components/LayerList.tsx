@@ -39,6 +39,7 @@ export default function LayerList({
 }) {
   const {
     project: p,
+    assets,
     layerId,
     objectId,
     select,
@@ -57,7 +58,7 @@ export default function LayerList({
   return (
     <div className="layers">
       <div className="panel-heading">
-        เลเยอร์{" "}
+        ชั้น{" "}
         <button
           title="เพิ่มชั้นว่าง"
           onClick={() => {
@@ -92,6 +93,7 @@ export default function LayerList({
           </button>
           <div className="layer-actions">
             <button
+              aria-pressed={!l.visible}
               title={l.visible ? "ซ่อนชั้น" : "แสดงชั้น"}
               onClick={() =>
                 change((p) => {
@@ -102,6 +104,7 @@ export default function LayerList({
               {l.visible ? <Eye size={15} /> : <EyeOff size={15} />}
             </button>
             <button
+              aria-pressed={l.locked}
               title={l.locked ? "ปลดล็อก" : "ล็อกชั้น"}
               onClick={() =>
                 change((p) => {
@@ -174,7 +177,8 @@ export default function LayerList({
                   {o.type === "text"
                     ? o.text?.slice(0, 24)
                     : o.type === "image"
-                      ? "รูปภาพ " + (l.objects.length - i)
+                      ? assets[o.assetId!]?.name ||
+                        "รูปภาพ " + (l.objects.length - i)
                       : o.type === "background"
                         ? "แผ่นพื้นหลัง"
                         : "เส้นวาด"}

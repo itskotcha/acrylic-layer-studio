@@ -25,9 +25,8 @@ export default function NewProject({
         <button className="close" onClick={onClose} aria-label="ปิด">
           <X />
         </button>
-        <span className="eyebrow">A NEW PERSPECTIVE</span>
-        <h2>เริ่มจากขนาดที่ใช่</h2>
-        <p>เลือกพื้นที่สำหรับภาพและเรื่องราวของคุณ</p>
+        <h2>สร้างงานใหม่</h2>
+        <p>เลือกสัดส่วนพื้นที่ออกแบบ</p>
         <div className="new-options">
           <div className="new-option">
             <ImagePlus />

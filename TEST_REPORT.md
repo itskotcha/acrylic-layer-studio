@@ -1,103 +1,94 @@
-# รายงานผลทดสอบ Acrylic Layer Studio v2
+# ผลทดสอบ Acrylic Layer Studio v3
 
-วันที่: 28 กันยายน 2026 · รุ่น 2.0.0
+วันที่: 2026-09-28 · ทดสอบซอร์สที่ใช้สร้าง ZIP นี้
 
 ## สภาพแวดล้อม
 
-- Linux, Node.js 24.19.0, npm 11.9.0
-- Chromium 153.0.8010.0 แบบ headless ผ่าน Playwright และ SwiftShader สำหรับ WebGL
-- Desktop viewport 1440 × 1000 และ mobile viewport 390 × 844
-- ใช้ชุด dependencies ตาม package-lock.json ไม่ใช้ backend หรือบริการภาพภายนอก
-- ในสภาพแวดล้อมนี้เรียก Chromium ผ่าน `QA_CHROMIUM_PATH` เพราะใช้ executable ที่เตรียมแยกจาก Playwright download; วิธีปกติบนเครื่องผู้ใช้คือ `npx playwright install chromium`
+- Linux x86_64, Node.js 24.19.0, npm 11.9.0
+- React 19.3.0, Konva 10.7.0, Three.js 0.180.0, Vite 7.3.6
+- Playwright 1.63.0 ใช้ Chromium headless จากแพ็กเกจ @sparticuz/chromium ผ่าน `QA_CHROMIUM_PATH` พร้อม SwiftShader
+- หน้าจอ 1366 × 768, 1440 × 1000 และ 390 × 844 ทั้งสว่าง/มืด
+- การทดสอบมือถือเป็น viewport บน Linux ไม่ใช่เครื่องมือถือจริง
 
-## ผลที่ทดสอบแล้วผ่าน
+## ผ่าน
 
-| ชุดตรวจ                 | ผล                                                         |
-| ----------------------- | ---------------------------------------------------------- |
-| `npm run build`         | ผ่าน TypeScript และ Vite production build                  |
-| `npm test`              | ผ่าน 9 unit tests                                          |
-| `npm run test:browser`  | ผ่าน 11 browser integration tests                          |
-| package.json / lockfile | version 2.0.0 และ dependency declarations ตรงกัน           |
-| ภาพหน้าจอ               | ตรวจ light/dark บน desktop และ mobile viewport ด้วยภาพจริง |
+- `npm ci --no-audit --no-fund` ติดตั้งใหม่จาก lockfile สำเร็จ dependencies ตรงต้นฉบับ v2 เปลี่ยนเฉพาะเวอร์ชันแอปเป็น 3.0.0
+- `npm test`: 10 unit tests ผ่าน
+- `npm run build`: TypeScript และ production build ผ่าน มีคำเตือน chunk ใหญ่ตามรายละเอียดด้านล่าง
+- Browser tests: 16 ชุดผ่านทั้งหมด (`--workers=2`) ใช้เวลารวมประมาณ 2 นาทีในการรันรอบสุดท้าย
 
-### หน่วย ขนาด และ migration
+### ธีมและหน้าจอ
 
-- 100 × 100 → 2048 × 2048 ทดสอบด้วย canvas จริง; ส่งออก PNG 4K และอ่าน PNG header ได้ 4096 × 4096
-- 100 × 150 → 1365 × 2048 และสัดส่วนอื่นตรวจด้วย unit tests
-- ZIP ภาพแยกชั้นอ่านกลับและตรวจขนาด 1K ของแต่ละ PNG
-- เปิดไฟล์ v1 ตัวอย่าง เปลี่ยนเป็น schema v2/75 × 100 และคง 3 depth layers
-- Unit test ตรวจ world position ของเส้นเก่าที่หมุนและมีจุดติดลบหลัง migration พร้อมตรวจว่าข้อมูลเดิมไม่เปลี่ยน
-- รักษาไฟล์ v1 ตัวอย่างแบบ byte-for-byte ใน examples
-- งานว่างส่งออก alpha = 0 ไม่มีพื้นโต๊ะหรือ selection UI ติดไปด้วย
+- ตรวจค่า computed foreground/background ของข้อความในปุ่ม ช่องกรอก dropdown คำอธิบายและป้ายควบคุมที่ปรากฏใน flow ทั้งสองธีม เป้าหมายอย่างน้อย 4.5:1 ไม่ใช่การรับรอง accessibility ทั้งเว็บไซต์
+- ปรับสีเส้นกรอบช่องกรอกและปุ่มด้วย control-border แยกจากเส้นแบ่งแผง สี accent ของข้อความแยกจากพื้นปุ่มหลัก
+- ตรวจ editor, ตั้งค่า, เมนูส่งออก, สร้างงาน, คุณสมบัติข้อความ, แผงหมุน และตัวควบคุม 3D ในขนาดหน้าจอที่กำหนด
+- ตรวจ screenshot จริงของ desktop/mobile ทั้งสองธีม ไม่มี horizontal page overflow ใน editor และเมนูหมุนอยู่ในขอบหน้าจอ
+- สีภาพส่งออก 2D ก่อน/หลังสลับธีมเท่ากันแบบ data URL
+- ธีมจำหลัง reload และตามระบบเปลี่ยนตาม color-scheme emulation
 
-### แปรง ยางลบ และข้อความ
+### หมุนและการจัดวาง
 
-- วาดทั้ง 6 หัวผ่าน pointer flow จริงใน Chromium ตรวจชนิดวัตถุและผล raster ของแต่ละหัวว่าแตกต่างและมีพิกเซลเส้น
-- Seed เดิมให้ bitmap เดิม ไฮไลต์ไม่มีพิกเซลทึบ 255 จากการทับภายในเส้นเดียว
-- ลากยางลบบางส่วนตัดหลายเส้น ตรวจภาพและข้อความในชั้นเดียวกันว่ายังเหมือนเดิม
-- Undo/Redo การวาดและการลบบางส่วน; unit test ตรวจ scale ของ geometry/rอยลบ/ความหนา
-- บันทึกและเปิด brush project กลับ ให้ PNG เหมือนเดิม
-- แก้การวัดข้อความเมื่อ fontSize เป็นหน่วยเล็ก: ใช้ฐาน 64 px พร้อม inverse transform ร่วมกันทั้ง editor และ export ไม่ขยาย bitmap ตัวอักษร 100 px
-- โหลดฟอนต์ก่อนวัด/วาดใหม่ แก้กรณี glyph/ระยะตัวอักษรไม่อัปเดตหลังโหลดฟอนต์
+- รูป ข้อความ และเส้นพร้อมรอยลบ: มุม 0, 45, 90, 180, 270, 360 องศา โดยตรวจ center และขนาดไม่เปลี่ยน
+- Unit test ตรวจวัตถุที่ปรับขนาดแล้วและมีมุมเดิม ตรวจ local points และ mask ไม่เปลี่ยนเพราะหมุน
+- ลาก slider จริง: ขณะลาก project history ยังไม่เพิ่ม ปล่อยแล้วเพิ่มหนึ่งขั้น Undo กลับค่าก่อนลากได้ และ Redo คืนผลหมุน
+- ล็อกวัตถุแล้วปุ่มหมุนใช้ไม่ได้ การแก้ผ่าน store เคารพ layer lock/object lock
+- Escape จากช่ององศายกเลิกค่าที่กำลังกรอกโดยไม่แก้งาน
+- บันทึก/เปิดกลับแล้ว model และ raster PNG ตรงกัน รวม masked strokes และฟอนต์
+- ทำสำเนา ล็อก ปลดล็อก ลบ และ Undo บน mobile viewport โดยคงชั้นไว้
+- Snapping ด้วย mouse drag สองระดับซูม; pan ไม่สร้างเส้น; two-pointer events จำลองยกเลิกเส้นเมื่อเริ่ม pinch
 
-### ฟอนต์และโปรเจกต์
+### ฟังก์ชันเดิมและการส่งออก
 
-- เพิ่ม/แก้ข้อความไทย นำเข้า Mali WOFF2 และใช้ font family ID ภายใน
-- เก็บฟอนต์ผ่าน autosave และ reload
-- บันทึก ZIP พร้อมฟอนต์ เปิดใน **browser context ใหม่** และตรวจภาพ PNG ให้ตรงกัน
-- ZIP ไม่ฝังฟอนต์มีหน้าต่างแก้ฟอนต์ขาด ก่อนแทนที่งานเดิม; เลือก Mali แทนได้
-- ไฟล์ WOFF2 เสียถูกปฏิเสธ ไม่เพิ่มลง project fonts
-- ฟอนต์ subset ที่ใช้ทดสอบมีขอบเขต glyph จำกัด ข้อความไทย/อังกฤษที่ต้อง fallback ยังคงเปิด/export ได้ ไม่อ้างว่าครอบคลุมทุกภาษา
-- Roundtrip project, autosave, ป้องกัน schema เสียก่อนแทนที่งานปัจจุบัน
+- สร้างสัดส่วน 1:1 และตามภาพแรก นำเข้าหลายภาพ แปรงทั้งหกแบบและความทึบไฮไลต์
+- ลบบางส่วนรักษาภาพและข้อความในชั้นเดียวกัน Undo/Redo ของการวาด/ลบ และ project roundtrip
+- พื้นหลังสีเดียว/ไล่สี HEX มุมไล่สี และป้องกันสร้างแผ่นพื้นหลังซ้ำ
+- นำเข้าฟอนต์ Mali WOFF2, autosave/reload, ฝังฟอนต์ ZIP และเปิดใน browser context ใหม่แล้ว PNG ตรงกัน
+- โปรเจกต์ไม่ฝังฟอนต์แสดงหน้าต่างแก้ฟอนต์ขาดก่อนแทนที่งาน เลือกฟอนต์แทนสำเร็จ ไฟล์ฟอนต์เสียไม่เพิ่มในโปรเจกต์
+- เปิด legacy v1 ผ่าน migration และตรวจ assets/ชั้นเดิม งาน schema 2 เปิดกลับได้โดยไม่เพิ่ม schema
+- ป้องกัน ZIP/schema ไม่ถูกต้องก่อนแทนที่งาน
+- ส่งออก PNG 4K ตรวจ header ว่าได้ 4096 × 4096, ZIP ภาพแยกชั้นที่ 1K และภาพ 3D ด้านยาว 2048 px พร้อมเนื้อหาภาพ
+- ตรวจตำแหน่งกล้อง quaternion zoom และขนาด renderer ก่อน/หลังส่งออกว่าไม่เปลี่ยน
+- สลับ 2D → 3D → 2D คืนตำแหน่ง artboard; สลับกลับ 3D คืนตำแหน่งและซูมกล้อง ปุ่มพอดีหน้าจอคืนซูม 100%
+- WebGL มุมหน้า แยกชั้น และหมุนก้อนผ่าน pointer drag
+- ไม่พบ JavaScript page errors ใน flow หลักและฉากทดสอบหลายชั้น การทดสอบฟอนต์เสียตั้งใจป้อนข้อมูลผิดและไม่ถือข้อความปฏิเสธฟอนต์เป็นความผิดพลาดของ flow ปกติ
 
-### Import และเมนูวัตถุ
+### ฉากหลายชั้นที่วัดจริง
 
-- นำเข้าภาพผ่าน file picker รวมหลายไฟล์และวิธีตามภาพแรก
-- Drag/drop ด้วย DataTransfer ที่สร้างใน test
-- Paste event พร้อมไฟล์ภาพจาก DataTransfer **เป็นข้อมูลจำลอง ไม่ใช่ OS clipboard จริง**
-- ปุ่ม clipboard บน mobile viewport ทดสอบข้อมูลภาพและการปฏิเสธสิทธิ์ด้วย mocked navigator.clipboard.read
-- ไม่เพิ่มภาพจาก paste ขณะโฟกัส textarea
-- ล็อกวัตถุแล้วปุ่มลบใช้ไม่ได้ ปลดล็อก ทำสำเนาแล้วเลือกสำเนา ลบและ Undo โดยคงเลเยอร์
-- ตรวจเมนูมือถืออยู่ในขอบ viewport และมีปุ่มสัมผัส
+ใช้ 12 ชั้น 96 วัตถุ (ภาพซ้ำจาก asset ตัวอย่างหนึ่งไฟล์ พร้อมข้อความและเส้นมีรอยลบ) พื้นที่ 75 × 100 หน่วย แก้มุม 12 ครั้ง ตรวจ project roundtrip/raster 1024 px และสลับ 2D/3D สามรอบ ก่อน Undo/Redo
 
-### พื้นหลัง ธีม gesture และ 3D
+- รอบทดสอบสุดท้ายใช้เวลา 21.449 วินาทีสำหรับ flow นี้
+- ขั้นตอน pack/unpack และเรนเดอร์ PNG สองครั้งเพื่อเทียบภาพใช้ 502.5 ms
+- จำนวนวัตถุหลังเปิดกลับ 96 ชิ้น ภาพ PNG ตรงกัน และไม่พบ JavaScript page errors
+- ค่าดิบอยู่ใน `docs/stability-v3.json`
 
-- เพิ่มแผ่นพื้นหลัง ไล่สี ปรับ HEX และมุม; กดเพิ่มอีกไม่สร้างวัตถุซ้ำ
-- เปรียบเทียบ PNG ก่อน/หลังเปลี่ยนธีม ได้ข้อมูลภาพเหมือนกัน
-- ธีมจดจำหลัง reload และตามระบบตอบสนองต่อ colorScheme emulation
-- Snapping ผ่านการลากจริงที่สองระดับ zoom
-- Hand pan ไม่สร้างวัตถุ; two-pointer events จำลองยกเลิกเส้นที่กำลังวาดก่อน pinch
-- ตรวจ WebGL หมุน มุมหน้า แยกชั้น และส่งออก PNG 2K ที่มีเนื้อหาภาพจริง
-- ตรวจ camera position/quaternion/zoom, ขนาด drawing buffer และ pixel ratio ก่อน/หลังส่งออก 3D ว่าไม่เปลี่ยน
-- ตรวจ JavaScript page errors ใน flow หลัก และตรวจ console TypeError/ข้อผิดพลาด Konva ในชุด v2
+ตัวเลขนี้เป็นเวลาในสภาพแวดล้อมทดสอบเดียว รวมการรอ render และเวลารอที่กำหนดใน test ไม่ใช่ FPS, benchmark เปรียบเทียบ v2 หรือหลักฐานว่าเครื่องทุกชนิดจะเร็วเท่ากัน ไม่ได้วัด peak memory หรือการใช้งานต่อเนื่องหลายชั่วโมง
 
-## ปัญหาที่พบและแก้ก่อนส่งมอบ
+## พบข้อจำกัด
 
-- Canvas ว่างจาก whitespace text child ใน Konva: เอา text child ออก เพิ่มการตรวจ console error และตรวจภาพหน้าจอ
-- Stroke เก่าที่มีจุดติดลบถูกตัดเมื่อแปลง renderer: normalize ขอบพร้อมชดเชยตำแหน่ง/มุมหมุน
-- ข้อความหน่วยเล็กเกิด spacing ผิด และฟอนต์แสดง fallback ค้าง: ปรับวิธีวัดข้อความและวาดใหม่หลัง font load
-- Dark theme อยู่ระหว่าง CSS transition ทำให้ภาพทดสอบเหมือนปุ่มซีด: รอ transition จบก่อน capture และตรวจ contrast จากภาพสุดท้าย
-- หนึ่งรอบทดสอบเปิด browser ไม่ได้เพราะ executable ชั่วคราวหายหลังเปลี่ยน runtime: เตรียม executable ใหม่และรันชุดทดสอบซ้ำจนผ่าน ไม่ใช่ข้อผิดพลาดของ source app
-
-## ข้อจำกัดที่พบ / ต้องทราบ
-
-- Vite แจ้ง bundle บางส่วนเกิน 500 kB (editor ประมาณ 746 kB และ 3D ประมาณ 982 kB ก่อน gzip) เป็นคำเตือนด้านขนาด ไม่ใช่ build error; 3D แยก lazy-load แล้ว
-- Clipboard ขึ้นกับ HTTPS/localhost, browser support และสิทธิ์ผู้ใช้ ไม่มี fallback ดึง URL ผ่าน proxy
-- 3D เป็นภาพจำลองวัสดุ ไม่ใช่ physically accurate refraction หรือไฟล์สั่งผลิต
-- Text rendering ระหว่าง OS/GPU อาจต่างกันในรายละเอียด antialias และ system font fallback
-- ไม่รับรองภาพ screenshot 3D ก่อน/หลัง export ว่าตรงกันทุกไบต์ เพราะ render/antialias timing อาจต่าง แต่ตรวจค่ากล้องและ renderer แล้วว่าคืนเดิม
-- ภาพเล็กไม่เกิดรายละเอียดใหม่เมื่อเพิ่ม export pixels และ 4K หลายชั้นใช้ RAM/GPU มาก
+- Production build มีคำเตือน bundle มากกว่า 500 kB: editor ประมาณ 753 kB และ 3D chunk ประมาณ 982 kB ก่อน gzip; แยก 3D โหลดเมื่อใช้งานแล้ว แต่การเปิดครั้งแรกยังมีต้นทุน
+- Clipboard/paste/drag-drop ใน tests ใช้ DataTransfer และ mocked navigator.clipboard.read รวมกรณีปฏิเสธสิทธิ์ ไม่ใช่ OS clipboard จริง การใช้งานจริงขึ้นอยู่กับเบราว์เซอร์ สิทธิ์ และแอปต้นทาง
+- View state จำในเซสชัน ไม่บันทึกลง ZIP หรือกู้คืนหลัง reload
+- วัตถุจำนวนมาก/ภาพใหญ่/ส่งออก 4K ต้องใช้หน่วยความจำมากขึ้น ไม่มีการรับรอง latency หรือขีดจำกัดการเรนเดอร์บนอุปกรณ์ทุกชนิด
+- ตัวจำลองอะคริลิกไม่ได้รับรองแสง การหักเห หรือสีของชิ้นงานผลิตจริง
 
 ## ยังไม่ได้ทดสอบ
 
-- iPhone, iPad, Android และ stylus บนอุปกรณ์จริง; mobile viewport และ PointerEvent emulation ไม่ใช่การทดสอบฮาร์ดแวร์จริง
-- Safari, Firefox, Windows/macOS browser จริง และการคัดลอกรูปข้ามแอปผ่าน system clipboard จริง
-- Performance/stress เต็มขีดจำกัด 24 เลเยอร์ × assets ขนาดใหญ่ หรือการส่งออก 4K บนโทรศัพท์หน่วยความจำต่ำ
-- ไฟล์ฟอนต์ทุกชนิด/ทุกผู้ผลิต รวม variable font axes ที่แอปไม่มีตัวปรับแยก
-- Browser storage quota เต็มจริงและ WebGL context loss บน GPU จริง มี error handling แต่ไม่ได้จำลองครบทุกระบบ
+- iPhone/iPad/Android เครื่องจริง, stylus pressure, Safari, Firefox และเบราว์เซอร์เก่าทั้งหมด
+- OS clipboard จริงข้ามทุกแอป รวมการวางจากเว็บไซต์ที่ส่งมาเฉพาะ URL
+- การใช้งานด้วย screen reader แบบครบระบบ และ accessibility audit ทุก state
+- งานสูงสุด 24 ชั้น/500 วัตถุพร้อมภาพเต็มขีดจำกัด, stress หลายชั่วโมง, low-memory device และจำลอง IndexedDB เต็ม
+- การหักเหอะคริลิกหรือสีเทียบกับสินค้าที่ผลิตจริง
 
-## หลักฐานและการรันซ้ำ
+## ทำซ้ำการทดสอบ
 
-`docs/` มี editor desktop, brush gallery, light/dark, mobile object menu, mobile dark, preview/front/back/exploded จาก browser test จริง ดูคำสั่งติดตั้งและรัน tests ใน README_TH.md
+```sh
+npm ci
+npm test
+npm run build
+npx playwright install chromium
+npm run test:browser -- --workers=2
+```
 
-ซอร์สใน ZIP เป็นชุดเดียวกับที่ผ่านการทดสอบ; ไฟล์ manifest.sha256 ใช้ตรวจ checksum ของไฟล์ที่ส่งมอบ ไม่รวม node_modules, dist, test-results หรือ browser binaries
+สภาพแวดล้อมนี้กำหนด `QA_CHROMIUM_PATH` ไปยัง Chromium executable ที่มีอยู่ ไฟล์ ZIP ไม่รวม browser executable หรือ node_modules ภาพหลักฐานที่เลือกไว้ใน `docs/screenshots-v3/` และค่าฉากทดสอบใน `docs/stability-v3.json`
+
+`manifest.sha256` บันทึก checksum ไฟล์ส่งมอบ โดยไม่รวมตัว manifest เอง ขั้นตอนแพ็ก ZIP ตรวจ CRC และเทียบ bytes ทุกไฟล์กับโฟลเดอร์ซอร์สที่ผ่านการทดสอบ

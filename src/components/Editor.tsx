@@ -6,7 +6,7 @@ import {
   Unlock,
   Copy,
   Trash2,
-  MoreHorizontal,
+  RotateCw,
   Hand,
   Undo2,
 } from "lucide-react";
@@ -20,6 +20,8 @@ import {
 } from "../model";
 import { normalizeStroke, toLocal, nearStroke } from "../brushes";
 import ArtNode from "./ArtNode";
+import RotationControl, { useRotationPreview } from "./RotationControl";
+import { views2D } from "../viewState";
 export type Tool = "select" | "pen" | "eraser" | "pan";
 function bounds(o: ArtObject) {
   const r = (o.rotation * Math.PI) / 180;
@@ -48,7 +50,6 @@ export default function Editor({
   inkOpacity,
   brushType,
   eraseMode,
-  onMore,
   onError,
 }: {
   tool: Tool;
@@ -57,7 +58,6 @@ export default function Editor({
   inkOpacity: number;
   brushType: BrushType;
   eraseMode: "stroke" | "partial";
-  onMore: () => void;
   onError: (s: string) => void;
 }) {
   const {
@@ -72,11 +72,21 @@ export default function Editor({
     past,
   } = useStudio();
   const pref = usePreferences();
+  const rotationPreview = useRotationPreview();
+  const [rotationOpen, setRotationOpen] = useState(false);
+  useEffect(() => setRotationOpen(false), [objectId, layerId, tool]);
+  useEffect(() => {
+    const escape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setRotationOpen(false);
+    };
+    window.addEventListener("keydown", escape);
+    return () => window.removeEventListener("keydown", escape);
+  }, []);
   const wrap = useRef<HTMLDivElement>(null),
     stage = useRef<Konva.Stage>(null),
     tr = useRef<Konva.Transformer>(null);
   const [size, setSize] = useState({ w: 600, h: 700 }),
-    [view, setView] = useState({ zoom: 1, px: 0, py: 0 }),
+    [view, setView] = useState(views2D.get(p.id) ?? { zoom: 1, px: 0, py: 0 }),
     [space, setSpace] = useState(false),
     [draft, setDraft] = useState<ArtObject | null>(null),
     [guides, setGuides] = useState<{ x?: number; y?: number }>({}),
@@ -141,14 +151,20 @@ export default function Editor({
         ? [node]
         : [],
     );
-  }, [objectId, p, effectiveTool, locked, layerId]);
+  }, [objectId, p, effectiveTool, locked, layerId, rotationPreview]);
   useEffect(() => {
     drawing.current = null;
     erase.current = null;
     setDraft(null);
     setErasePreview([]);
-    setView({ zoom: 1, px: 0, py: 0 });
+    setView(views2D.get(p.id) ?? { zoom: 1, px: 0, py: 0 });
   }, [p.id]);
+  useEffect(() => {
+    views2D.set(p.id, view);
+  }, [view, p.id]);
+  useEffect(() => {
+    cancelDrawing();
+  }, [tool, layerId]);
   const client = (e: PointerEvent | WheelEvent) => {
     const r = wrap.current!.getBoundingClientRect();
     return { x: e.clientX - r.left, y: e.clientY - r.top };
@@ -308,7 +324,10 @@ export default function Editor({
   }
   void menuTick;
   function captureDown(e: React.PointerEvent<HTMLDivElement>) {
-    if ((e.target as HTMLElement).closest("button,select")) return;
+    if (
+      (e.target as HTMLElement).closest("button,select,input,.rotation-popover")
+    )
+      return;
     pointers.current.set(e.pointerId, client(e.nativeEvent));
     if (pointers.current.size === 2) {
       multi.current = true;
@@ -506,7 +525,12 @@ export default function Editor({
                   {l.objects.map((o) => (
                     <ArtNode
                       key={o.id}
-                      o={o}
+                      o={
+                        rotationPreview.source === p &&
+                        rotationPreview.object?.id === o.id
+                          ? rotationPreview.object
+                          : o
+                      }
                       assets={assets}
                       scale={scale * Math.min(devicePixelRatio, 2)}
                       {...common(o, l.id, l.locked)}
@@ -599,11 +623,34 @@ export default function Editor({
             >
               <Trash2 size={18} />
             </button>
-            <button aria-label="คุณสมบัติวัตถุ" onClick={onMore}>
-              <MoreHorizontal size={20} />
+            <button
+              aria-label="หมุนวัตถุ"
+              aria-expanded={rotationOpen}
+              disabled={locked}
+              onClick={() => setRotationOpen(!rotationOpen)}
+            >
+              <RotateCw size={20} />
             </button>
           </div>
         )}
+      {rotationOpen && (
+        <div
+          className="rotation-popover"
+          role="dialog"
+          aria-label="หมุนวัตถุ 360 องศา"
+        >
+          <div className="panel-heading">
+            หมุนวัตถุ
+            <button
+              aria-label="ปิดการหมุน"
+              onClick={() => setRotationOpen(false)}
+            >
+              ✕
+            </button>
+          </div>
+          <RotationControl />
+        </div>
+      )}
       <div className="canvas-meta">
         {Number(p.width.toFixed(2))} × {Number(p.height.toFixed(2))} หน่วย ·{" "}
         {p.layers.length} ชั้น
@@ -623,8 +670,11 @@ export default function Editor({
           title="พอดีหน้าจอ"
           onClick={() => setView({ zoom: 1, px: 0, py: 0 })}
         >
-          {Math.round(view.zoom * 100)}%
+          พอดีหน้าจอ
         </button>
+        <span className="zoom-value" aria-label="ระดับซูม">
+          {Math.round(view.zoom * 100)}%
+        </span>
         <button aria-label="ซูมเข้า" onClick={() => zoomAt(view.zoom * 1.2)}>
           +
         </button>

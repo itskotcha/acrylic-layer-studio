@@ -173,3 +173,35 @@ describe("v2 units, migration and masks", () => {
     expect(useStudio.getState().project.layers[0].objects[0].x).toBe(10);
   });
 });
+
+import { objectCenter, rotateAboutCenter } from "../src/geometry";
+describe("v3 center rotation", () => {
+  it("preserves center, dimensions and local masks at all specified angles after scaling", () => {
+    for (const type of ["image", "text", "stroke"] as const) {
+      const original = scaleObject(
+        {
+          ...baseObject(type),
+          x: 13,
+          y: 21,
+          width: 29,
+          height: 17,
+          rotation: 37,
+          points: [2, 3, 12, 8],
+          erasures: [{ points: [3, 4, 9, 8], width: 2 }],
+        },
+        1.7,
+      );
+      const c = objectCenter(original);
+      for (const angle of [0, 45, 90, 180, 270, 360]) {
+        const next = rotateAboutCenter(original, angle);
+        expect(objectCenter(next).x).toBeCloseTo(c.x, 10);
+        expect(objectCenter(next).y).toBeCloseTo(c.y, 10);
+        expect(next.width).toBe(original.width);
+        expect(next.height).toBe(original.height);
+        expect(next.erasures).toEqual(original.erasures);
+        expect(next.points).toEqual(original.points);
+      }
+      expect(rotateAboutCenter(original, NaN)).toBe(original);
+    }
+  });
+});

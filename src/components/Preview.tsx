@@ -25,6 +25,7 @@ import {
   type Assets,
 } from "../model";
 import { usePreferences } from "../preferences";
+import { views3D } from "../viewState";
 class Boundary extends Component<{ children: ReactNode }, { error: boolean }> {
   state = { error: false };
   static getDerivedStateFromError() {
@@ -135,19 +136,54 @@ function Scene({
     return new THREE.CanvasTexture(c);
   }, []);
   useEffect(() => () => shadow.dispose(), [shadow]);
+  const initialized = useRef(false);
+  const fitZoom = Math.min(size.width / (w + 2), size.height / 4.8);
+  const latest = useRef({ auto, exploded, quality, fitZoom });
+  latest.current = { auto, exploded, quality, fitZoom };
+  const previousFit = useRef(fitZoom);
   useEffect(() => {
     const c = camera as THREE.OrthographicCamera;
-    c.zoom = Math.min(size.width / (w + 2), size.height / 4.8);
+    const saved = views3D.get(p.id);
+    c.zoom =
+      fitZoom *
+      (initialized.current
+        ? c.zoom / previousFit.current
+        : (saved?.zoomRatio ?? 1));
+    previousFit.current = fitZoom;
+    if (!initialized.current && saved) {
+      camera.position.fromArray(saved.position);
+      controls.current?.target.fromArray(saved.target);
+      controls.current?.update();
+    }
+    initialized.current = true;
     c.updateProjectionMatrix();
     invalidate();
   }, [size.width, size.height, w, camera, invalidate]);
   useEffect(() => {
+    if (front === 0 && views3D.has(p.id)) return;
     camera.position.set(front % 2 === 1 ? 0 : 4, front % 2 === 1 ? 0 : 2.2, 8);
     camera.lookAt(0, 0, 0);
     controls.current?.target.set(0, 0, 0);
     controls.current?.update();
     invalidate();
   }, [front, camera, invalidate]);
+  useEffect(
+    () => () => {
+      views3D.set(p.id, {
+        position: camera.position.toArray() as [number, number, number],
+        target: (controls.current?.target.toArray() ?? [0, 0, 0]) as [
+          number,
+          number,
+          number,
+        ],
+        zoomRatio: camera.zoom / latest.current.fitZoom,
+        auto: latest.current.auto,
+        exploded: latest.current.exploded,
+        quality: latest.current.quality,
+      });
+    },
+    [p.id, camera],
+  );
   useEffect(() => {
     onReady(async () => {
       if (
@@ -355,6 +391,7 @@ function Scene({
         autoRotate={auto}
         autoRotateSpeed={1.4}
         enablePan={false}
+        enableDamping={false}
         minZoom={25}
         maxZoom={600}
         minPolarAngle={0.03}
@@ -364,10 +401,12 @@ function Scene({
   );
 }
 export default function Preview({ onError }: { onError: (s: string) => void }) {
-  const [auto, setAuto] = useState(false),
-    [exploded, setExploded] = useState(false),
+  const projectId = useStudio((s) => s.project.id);
+  const saved = views3D.get(projectId);
+  const [auto, setAuto] = useState(saved?.auto ?? false),
+    [exploded, setExploded] = useState(saved?.exploded ?? false),
     [front, setFront] = useState(0),
-    [quality, setQuality] = useState("high"),
+    [quality, setQuality] = useState(saved?.quality ?? "high"),
     [lost, setLost] = useState(false),
     [exporting, setExporting] = useState(false);
   const prefs = usePreferences();

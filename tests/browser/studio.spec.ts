@@ -43,7 +43,7 @@ test("editor, project roundtrip, autosave, exports, WebGL and mobile", async ({
     .getByRole("button", { name: "PNG · ภาพด้านหน้า", exact: true })
     .click();
   await (await png).saveAs(info.outputPath("flat.png"));
-  await page.getByRole("button", { name: "พรีวิว 3D", exact: true }).click();
+  await page.getByRole("button", { name: "ดูแบบ 3D", exact: true }).click();
   await expect(page.getByTestId("preview").locator("canvas")).toBeVisible();
   await page.waitForTimeout(2500);
   await page.screenshot({ path: info.outputPath("preview.png") });
@@ -77,6 +77,7 @@ test("editor, project roundtrip, autosave, exports, WebGL and mobile", async ({
     ),
   ).toBe(true);
   await page.getByRole("button", { name: "เครื่องมือ / ชั้น" }).click();
+  await page.locator(".import-block summary").click();
   await expect(
     page.getByRole("button", { name: "เพิ่มรูปภาพ", exact: true }),
   ).toBeVisible();
@@ -94,7 +95,7 @@ test("new project ratio, import first image, drawing history and three PNGs", as
   await page
     .getByRole("button", { name: "สร้างพื้นที่ออกแบบ", exact: true })
     .click();
-  await expect(page.getByText("100 × 100", { exact: true })).toBeVisible();
+  await expect(page.locator(".canvas-meta")).toContainText("100 × 100");
   const png = await page.evaluate(() => {
     const c = document.createElement("canvas");
     c.width = 600;
@@ -111,7 +112,7 @@ test("new project ratio, import first image, drawing history and three PNGs", as
     .getByRole("dialog")
     .locator("input[type=file]")
     .setInputFiles(path);
-  await expect(page.getByText("75 × 100", { exact: true })).toBeVisible();
+  await expect(page.locator(".canvas-meta")).toContainText("75 × 100");
   await page.getByTestId("image-input").setInputFiles([path, path]);
   await expect(page.locator(".layer-card")).toHaveCount(3);
   await page.getByRole("button", { name: "ปากกา", exact: true }).click();
@@ -165,6 +166,7 @@ test("layer visibility, locking, duplication, ordering and invalid project prote
   await page.getByTitle("เลื่อนชั้นไปหลัง").first().click();
   await page.getByTitle("ย้อนกลับ").click();
   await expect(count.first()).toContainText("สำเนา");
+  await page.getByRole("tab", { name: "โปรเจกต์", exact: true }).click();
   const input = page.getByLabel("ความหนา · หน่วยเสมือน", { exact: true });
   await input.fill("0.1");
   await input.press("Enter");

@@ -1,0 +1,12 @@
+{
+  "layers": 12,
+  "objects": 96,
+  "angleEdits": 12,
+  "modeCycles": 3,
+  "totalMs": 21449,
+  "roundtrip": {
+    "equal": true,
+    "objects": 96,
+    "elapsedMs": 502.5
+  }
+}

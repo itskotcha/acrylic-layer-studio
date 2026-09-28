@@ -8,6 +8,7 @@ import {
 } from "react";
 import {
   Hand,
+  Settings,
   ClipboardPaste,
   Layers3,
   Plus,
@@ -60,6 +61,8 @@ import { usePreferences } from "./preferences";
 import { BRUSHES } from "./brushes";
 import { missingFonts, releaseUnusedFonts } from "./fonts";
 import { MissingFonts } from "./components/FontPicker";
+import Background from "./components/Background";
+import { resetViews } from "./viewState";
 import BrushPad from "./components/BrushPad";
 const Preview = lazy(() => import("./components/Preview"));
 export default function App() {
@@ -102,7 +105,13 @@ export default function App() {
     [busy, setBusy] = useState(false),
     [mobile, setMobile] = useState<"layers" | "props" | null>(null),
     [exports, setExports] = useState(false),
-    [intoLayer, setIntoLayer] = useState(false);
+    [intoLayer, setIntoLayer] = useState(false),
+    [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsDialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    if (settingsOpen) settingsDialog.current?.showModal();
+    else settingsDialog.current?.close();
+  }, [settingsOpen]);
   const imageInput = useRef<HTMLInputElement>(null),
     openInput = useRef<HTMLInputElement>(null);
   const loadToken = useRef(0);
@@ -182,7 +191,10 @@ export default function App() {
         (e.target as HTMLElement).closest(
           "input,textarea,select,[contenteditable]",
         ) ||
-        newOpen
+        newOpen ||
+        pending ||
+        settingsOpen ||
+        busyRef.current
       )
         return;
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
@@ -204,7 +216,7 @@ export default function App() {
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [newOpen]);
+  }, [newOpen, pending, settingsOpen]);
   useEffect(() => {
     if (!p.layers.some((l) => l.id === s.layerId))
       s.select(p.layers.at(-1)!.id);
@@ -236,6 +248,7 @@ export default function App() {
       "แทนที่งานปัจจุบัน? หากต้องการเก็บงานเดิม ให้ยกเลิกและกดบันทึกโปรเจกต์ก่อน",
     );
   function create(p: Project, a: Assets) {
+    resetViews();
     loadToken.current++;
     s.replace(p, a);
     setNewOpen(false);
@@ -393,7 +406,7 @@ export default function App() {
       </div>
     );
   return (
-    <div className="app">
+    <div className={"app mode-" + mode}>
       <header className="topbar">
         <div className="brand">
           <div className="brand-mark">
@@ -421,6 +434,13 @@ export default function App() {
         </div>
         <div className="top-actions">
           <button
+            title="ตั้งค่า"
+            aria-label="ตั้งค่า"
+            onClick={() => setSettingsOpen(true)}
+          >
+            <Settings size={18} />
+          </button>
+          <button
             title="สร้างงานใหม่"
             onClick={() => {
               if (canReplace()) setNewOpen(true);
@@ -429,7 +449,10 @@ export default function App() {
             <Plus size={17} />
             <span>ใหม่</span>
           </button>
-          <button onClick={() => openInput.current?.click()}>
+          <button
+            aria-label="เปิดงาน"
+            onClick={() => openInput.current?.click()}
+          >
             <FolderOpen size={17} />
             <span>เปิดงาน</span>
           </button>
@@ -439,7 +462,12 @@ export default function App() {
           <button title="ทำซ้ำ" disabled={!s.future.length} onClick={s.redo}>
             <Redo2 size={18} />
           </button>
-          <button className="save" onClick={save} disabled={busy}>
+          <button
+            className="save"
+            aria-label="บันทึกโปรเจกต์"
+            onClick={save}
+            disabled={busy}
+          >
             <Download size={17} />
             <span>บันทึกโปรเจกต์</span>
           </button>
@@ -522,9 +550,7 @@ export default function App() {
             <X />
             ปิดเครื่องมือ
           </button>
-          <div className="panel-heading">
-            เครื่องมือ <span>CREATE</span>
-          </div>
+          <div className="panel-heading">เครื่องมือ</div>
           <div className="tools">
             <button
               className={tool === "select" ? "active" : ""}
@@ -561,52 +587,21 @@ export default function App() {
               ข้อความ
             </button>
           </div>
-          <div className="studio-settings">
-            <label className="field">
-              ธีม
-              <select
-                aria-label="ธีม"
-                value={prefs.theme}
-                onChange={(e) => prefs.set({ theme: e.target.value as any })}
-              >
-                <option value="light">สว่าง</option>
-                <option value="dark">มืด</option>
-                <option value="system">ตามระบบ</option>
-              </select>
-            </label>
-            <label className="field">
-              พื้นโต๊ะทำงาน
-              <select
-                aria-label="พื้นโต๊ะทำงาน"
-                value={prefs.desk}
-                onChange={(e) => prefs.set({ desk: e.target.value as any })}
-              >
-                <option value="checker">ตารางโปร่งใส</option>
-                <option value="white">ขาว</option>
-                <option value="gray">เทา</option>
-                <option value="black">ดำ</option>
-              </select>
-            </label>
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={prefs.snap}
-                onChange={(e) => prefs.set({ snap: e.target.checked })}
-              />
-              ดูดติดกึ่งกลางและขอบ
-            </label>
-            <button
-              className={tool === "pan" ? "wide active" : "wide"}
-              onClick={() => {
-                setTool("pan");
-                setMode("2d");
-              }}
-            >
-              <Hand size={17} />
-              เลื่อนพื้นที่ · Space
-            </button>
-          </div>
-          <div className="import-block">
+          <button
+            className={tool === "pan" ? "wide active" : "wide"}
+            onClick={() => {
+              setTool("pan");
+              setMode("2d");
+            }}
+          >
+            <Hand size={17} />
+            เลื่อนผืนงาน
+          </button>
+          <details className="import-block">
+            <summary>
+              <ImagePlus size={17} />
+              รูปภาพ
+            </summary>
             <button
               className="wide"
               disabled={busy}
@@ -627,6 +622,9 @@ export default function App() {
               />
               เพิ่มลงชั้นที่เลือก
             </label>
+          </details>
+          <div className="background-tool">
+            <Background onError={notify} />
           </div>
           {(tool === "pen" || tool === "eraser") && (
             <div className="brush-controls">
@@ -745,12 +743,9 @@ export default function App() {
                 onClick={() => setMode("3d")}
               >
                 <Box size={17} />
-                พรีวิว 3D
+                ดูแบบ 3D
               </button>
             </div>
-            <span className="workspace-caption">
-              {mode === "2d" ? "ทุกภาพ มีมิติของตัวเอง" : "มุมมองใหม่ของงานคุณ"}
-            </span>
           </div>
           <div
             className="canvas-area"
@@ -771,7 +766,6 @@ export default function App() {
                 inkOpacity={inkOpacity}
                 brushType={brushType}
                 eraseMode={eraseMode}
-                onMore={() => setMobile("props")}
                 onError={notify}
               />
             ) : (
@@ -784,7 +778,7 @@ export default function App() {
             {p.layers.every((l) => !l.objects.length) && mode === "2d" && (
               <div className="empty-hint">
                 <ImagePlus />
-                <strong>เริ่มเรื่องราวของคุณ</strong>
+                <strong>เริ่มออกแบบ</strong>
                 <span>เพิ่มรูปภาพ แล้วจัดวางเป็นชั้น ๆ</span>
                 <button
                   className="primary"
@@ -801,7 +795,9 @@ export default function App() {
                 ? tool === "pen"
                   ? "ลากเพื่อวาดบนชั้นที่เลือก"
                   : tool === "eraser"
-                    ? "แตะเส้นวาดเพื่อลบทั้งเส้น"
+                    ? eraseMode === "partial"
+                      ? "ลากเพื่อลบบางส่วนของเส้น"
+                      : "แตะเส้นวาดเพื่อลบทั้งเส้น"
                     : "เลือกวัตถุเพื่อย้าย ปรับขนาด และหมุน"
                 : "ด้านหลังแสดงภาพกลับด้านตามการมองผ่านแผ่น"}
             </span>
@@ -817,9 +813,69 @@ export default function App() {
             <X />
             ปิดคุณสมบัติ
           </button>
-          <Properties onError={notify} />
+          <Properties onError={notify} mode={mode} />
         </div>
       </div>
+      {mobile && (
+        <button
+          className="drawer-backdrop"
+          aria-label="ปิดแผง"
+          onClick={() => setMobile(null)}
+        />
+      )}
+      <dialog
+        ref={settingsDialog}
+        className="settings-dialog"
+        onCancel={() => setSettingsOpen(false)}
+        onClick={(e) => {
+          if (e.target === e.currentTarget) setSettingsOpen(false);
+        }}
+      >
+        <div className="panel-heading">
+          ตั้งค่า
+          <button
+            aria-label="ปิดตั้งค่า"
+            onClick={() => setSettingsOpen(false)}
+          >
+            <X size={18} />
+          </button>
+        </div>{" "}
+        <div className="studio-settings">
+          <label className="field">
+            ธีม
+            <select
+              aria-label="ธีม"
+              value={prefs.theme}
+              onChange={(e) => prefs.set({ theme: e.target.value as any })}
+            >
+              <option value="light">สว่าง</option>
+              <option value="dark">มืด</option>
+              <option value="system">ตามระบบ</option>
+            </select>
+          </label>
+          <label className="field">
+            พื้นโต๊ะทำงาน
+            <select
+              aria-label="พื้นโต๊ะทำงาน"
+              value={prefs.desk}
+              onChange={(e) => prefs.set({ desk: e.target.value as any })}
+            >
+              <option value="checker">ตารางโปร่งใส</option>
+              <option value="white">ขาว</option>
+              <option value="gray">เทา</option>
+              <option value="black">ดำ</option>
+            </select>
+          </label>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={prefs.snap}
+              onChange={(e) => prefs.set({ snap: e.target.checked })}
+            />
+            ช่วยจัดแนว
+          </label>
+        </div>
+      </dialog>
       <nav className="mobile-nav">
         <button
           onClick={() => setMobile(mobile === "layers" ? null : "layers")}
