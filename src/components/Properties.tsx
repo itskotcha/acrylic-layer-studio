@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useStudio, duplicateObject, deleteObject } from "../store";
-import { constrainDepth, distribute, imageObject } from "../model";
+import { constrainDepth, distribute, imageObject, scaleObject } from "../model";
 export function NumberField({
   label,
   value,
@@ -41,7 +41,13 @@ export function NumberField({
     </label>
   );
 }
-export default function Properties() {
+import FontPicker from "./FontPicker";
+import Background from "./Background";
+export default function Properties({
+  onError,
+}: {
+  onError: (s: string) => void;
+}) {
   const {
     project: p,
     assets,
@@ -65,11 +71,12 @@ export default function Properties() {
       </div>
       <section>
         <h3>ก้อนอะคริลิก</h3>
+        <Background onError={onError} />
         <div className="dimension">
           <strong>
-            {p.width} × {p.height}
+            {+p.width.toFixed(2)} × {+p.height.toFixed(2)}
           </strong>
-          <span>พิกเซล</span>
+          <span>หน่วยออกแบบ · ไม่ใช่ px / mm</span>
         </div>
         <NumberField
           label="ความหนา · หน่วยเสมือน"
@@ -137,94 +144,129 @@ export default function Properties() {
                 : "เส้นวาด"}{" "}
             {l.locked && "· ล็อกแล้ว"}
           </h3>
-          <fieldset disabled={l.locked}>
-            <div className="field-grid">
-              <NumberField
-                label="X"
-                value={o.x}
-                onChange={(v) => patchObject({ x: v })}
-              />
-              <NumberField
-                label="Y"
-                value={o.y}
-                onChange={(v) => patchObject({ y: v })}
-              />
-              <NumberField
-                label="กว้าง"
-                value={o.width}
-                min={4}
-                max={10000}
-                onChange={(v) =>
-                  patchObject(
-                    o.type === "stroke"
-                      ? {
-                          width: v,
-                          points: o.points!.map((n, i) =>
-                            i % 2 ? n : (n * v) / o.width,
-                          ),
-                        }
-                      : {
-                          width: v,
-                          height: (o.height * v) / o.width,
-                          ...(o.type === "text"
-                            ? { fontSize: (o.fontSize! * v) / o.width }
-                            : {}),
-                        },
-                  )
-                }
-              />
-              <NumberField
-                label="สูง"
-                value={o.height}
-                min={4}
-                max={10000}
-                onChange={(v) =>
-                  patchObject(
-                    o.type === "stroke"
-                      ? {
-                          height: v,
-                          points: o.points!.map((n, i) =>
-                            i % 2 ? (n * v) / o.height : n,
-                          ),
-                        }
-                      : {
-                          height: v,
-                          width: (o.width * v) / o.height,
-                          ...(o.type === "text"
-                            ? { fontSize: (o.fontSize! * v) / o.height }
-                            : {}),
-                        },
-                  )
-                }
-              />
-              <NumberField
-                label="หมุน °"
-                value={o.rotation}
-                min={-360}
-                max={360}
-                onChange={(v) => patchObject({ rotation: v })}
-              />
-              <NumberField
-                label="ความทึบ"
-                value={o.opacity}
-                min={0}
-                max={1}
-                step={0.05}
-                onChange={(v) => patchObject({ opacity: v })}
-              />
-            </div>
-            <div className="button-row">
-              <button
-                onClick={() => patchObject({ x: (p.width - o.width) / 2 })}
-              >
-                กึ่งกลาง X
-              </button>
-              <button
-                onClick={() => patchObject({ y: (p.height - o.height) / 2 })}
-              >
-                กึ่งกลาง Y
-              </button>
-            </div>
+          <button
+            className="wide"
+            disabled={l.locked}
+            onClick={() => patchObject({ locked: !o.locked })}
+          >
+            {o.locked ? "ปลดล็อกวัตถุ" : "ล็อกวัตถุ"}
+          </button>
+          <fieldset disabled={l.locked || o.locked}>
+            {o.type !== "background" && (
+              <>
+                <div className="field-grid">
+                  <NumberField
+                    label="X"
+                    value={o.x}
+                    onChange={(v) => patchObject({ x: v })}
+                  />
+                  <NumberField
+                    label="Y"
+                    value={o.y}
+                    onChange={(v) => patchObject({ y: v })}
+                  />
+                  <NumberField
+                    label="กว้าง"
+                    value={o.width}
+                    min={0.01}
+                    max={10000}
+                    onChange={(v) =>
+                      patchObject({
+                        ...scaleObject(o, v / o.width),
+                        x: o.x,
+                        y: o.y,
+                      })
+                    }
+                  />
+                  <NumberField
+                    label="สูง"
+                    value={o.height}
+                    min={0.01}
+                    max={10000}
+                    onChange={(v) =>
+                      patchObject({
+                        ...scaleObject(o, v / o.height),
+                        x: o.x,
+                        y: o.y,
+                      })
+                    }
+                  />
+                  <NumberField
+                    label="หมุน °"
+                    value={o.rotation}
+                    min={-360}
+                    max={360}
+                    onChange={(v) => patchObject({ rotation: v })}
+                  />
+                  <NumberField
+                    label="ความทึบ"
+                    value={o.opacity}
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    onChange={(v) => patchObject({ opacity: v })}
+                  />
+                </div>
+                <div className="button-row">
+                  <button
+                    onClick={() => patchObject({ x: (p.width - o.width) / 2 })}
+                  >
+                    กึ่งกลาง X
+                  </button>
+                  <button
+                    onClick={() =>
+                      patchObject({ y: (p.height - o.height) / 2 })
+                    }
+                  >
+                    กึ่งกลาง Y
+                  </button>
+                </div>
+              </>
+            )}
+            {o.type === "background" && (
+              <>
+                <label className="field">
+                  รูปแบบพื้นหลัง
+                  <select
+                    value={o.backgroundMode}
+                    onChange={(e) =>
+                      patchObject({ backgroundMode: e.target.value as any })
+                    }
+                  >
+                    <option value="solid">สีเดียว</option>
+                    <option value="gradient">ไล่สี</option>
+                    <option value="transparent">โปร่งใส</option>
+                  </select>
+                </label>
+                <NumberField
+                  label="ความทึบพื้นหลัง"
+                  value={o.opacity}
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  onChange={(v) => patchObject({ opacity: v })}
+                />
+                {o.backgroundMode === "gradient" && (
+                  <>
+                    <label className="field">
+                      สีที่สอง
+                      <input
+                        type="color"
+                        value={o.fill2}
+                        onChange={(e) => patchObject({ fill2: e.target.value })}
+                      />
+                    </label>
+                    <NumberField
+                      label="ทิศทางไล่สี °"
+                      value={o.gradientAngle || 0}
+                      min={0}
+                      max={360}
+                      onChange={(v) => patchObject({ gradientAngle: v })}
+                    />
+                  </>
+                )}
+              </>
+            )}
             {o.type === "image" && (
               <div className="button-row">
                 {[false, true].map((fill) => (
@@ -253,23 +295,11 @@ export default function Properties() {
                     onChange={(e) => patchObject({ text: e.target.value })}
                   />
                 </label>
-                <label className="field">
-                  ฟอนต์
-                  <select
-                    value={o.fontFamily}
-                    onChange={(e) =>
-                      patchObject({ fontFamily: e.target.value })
-                    }
-                  >
-                    <option>Noto Sans Thai</option>
-                    <option>sans-serif</option>
-                    <option>serif</option>
-                  </select>
-                </label>
+                <FontPicker onError={onError} />
                 <NumberField
                   label="ขนาดตัวอักษร"
                   value={o.fontSize!}
-                  min={1}
+                  min={0.01}
                   max={1000}
                   onChange={(v) =>
                     patchObject({
@@ -303,70 +333,115 @@ export default function Properties() {
                 />
               </label>
             )}
+            {o.type === "background" && (
+              <>
+                <label className="field">
+                  สี HEX
+                  <input
+                    key={o.fill}
+                    defaultValue={o.fill}
+                    onBlur={(e) => {
+                      if (/^#[a-f0-9]{6}$/i.test(e.target.value))
+                        patchObject({ fill: e.target.value });
+                      else onError("ใช้สี HEX เช่น #ffffff");
+                    }}
+                  />
+                </label>
+                <div className="palette">
+                  {[
+                    "#ffffff",
+                    "#000000",
+                    "#e0e7ff",
+                    "#fecdd3",
+                    "#fef3c7",
+                    "#d1fae5",
+                  ].map((c) => (
+                    <button
+                      key={c}
+                      aria-label={c}
+                      style={{ background: c }}
+                      onClick={() => patchObject({ fill: c })}
+                    />
+                  ))}
+                </div>
+              </>
+            )}
             {o.type === "stroke" && (
               <NumberField
                 label="ขนาดเส้น"
                 value={o.strokeWidth!}
-                min={1}
+                min={0.01}
                 max={200}
                 onChange={(v) => patchObject({ strokeWidth: v })}
               />
             )}
-            <label className="field">
-              ย้ายไปชั้น
-              <select
-                value={l.id}
-                onChange={(e) => {
-                  const target = e.target.value;
-                  change((p) => {
-                    const from = p.layers.find((x) => x.id === l.id)!,
-                      to = p.layers.find((x) => x.id === target)!;
-                    if (to.locked) return;
-                    from.objects = from.objects.filter((x) => x.id !== o.id);
-                    to.objects.push(o);
-                  });
-                  select(target, o.id);
-                }}
-              >
-                {p.layers
-                  .filter((x) => !x.locked || x.id === l.id)
-                  .map((x) => (
-                    <option key={x.id} value={x.id}>
-                      {x.name}
-                    </option>
-                  ))}
-              </select>
-            </label>
-            <div className="button-row">
-              <button
-                onClick={() =>
-                  change((p) => {
-                    const a = p.layers.find((x) => x.id === l.id)!.objects;
-                    const i = a.findIndex((x) => x.id === o.id);
-                    if (i < a.length - 1) [a[i], a[i + 1]] = [a[i + 1], a[i]];
-                  })
-                }
-              >
-                วัตถุขึ้นหน้า
+            {o.type !== "background" && (
+              <>
+                <label className="field">
+                  ย้ายไปชั้น
+                  <select
+                    value={l.id}
+                    onChange={(e) => {
+                      const target = e.target.value;
+                      change((p) => {
+                        const from = p.layers.find((x) => x.id === l.id)!,
+                          to = p.layers.find((x) => x.id === target)!;
+                        if (to.locked) return;
+                        from.objects = from.objects.filter(
+                          (x) => x.id !== o.id,
+                        );
+                        to.objects.push(o);
+                      });
+                      select(target, o.id);
+                    }}
+                  >
+                    {p.layers
+                      .filter((x) => !x.locked || x.id === l.id)
+                      .map((x) => (
+                        <option key={x.id} value={x.id}>
+                          {x.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                <div className="button-row">
+                  <button
+                    onClick={() =>
+                      change((p) => {
+                        const a = p.layers.find((x) => x.id === l.id)!.objects;
+                        const i = a.findIndex((x) => x.id === o.id);
+                        if (i < a.length - 1)
+                          [a[i], a[i + 1]] = [a[i + 1], a[i]];
+                      })
+                    }
+                  >
+                    วัตถุขึ้นหน้า
+                  </button>
+                  <button
+                    onClick={() =>
+                      change((p) => {
+                        const a = p.layers.find((x) => x.id === l.id)!.objects;
+                        const i = a.findIndex((x) => x.id === o.id);
+                        if (i > 0) [a[i], a[i - 1]] = [a[i - 1], a[i]];
+                      })
+                    }
+                  >
+                    วัตถุไปหลัง
+                  </button>
+                </div>
+                <div className="button-row">
+                  <button onClick={duplicateObject}>ทำสำเนา</button>
+                  <button className="danger" onClick={deleteObject}>
+                    ลบวัตถุ
+                  </button>
+                </div>
+              </>
+            )}
+            {o.type === "background" && (
+              <button className="danger wide" onClick={deleteObject}>
+                ลบพื้นหลัง
               </button>
-              <button
-                onClick={() =>
-                  change((p) => {
-                    const a = p.layers.find((x) => x.id === l.id)!.objects;
-                    const i = a.findIndex((x) => x.id === o.id);
-                    if (i > 0) [a[i], a[i - 1]] = [a[i - 1], a[i]];
-                  })
-                }
-              >
-                วัตถุไปหลัง
-              </button>
-            </div>
-            <div className="button-row">
-              <button onClick={duplicateObject}>ทำสำเนา</button>
-              <button className="danger" onClick={deleteObject}>
-                ลบวัตถุ
-              </button>
-            </div>
+            )}
           </fieldset>
         </section>
       )}

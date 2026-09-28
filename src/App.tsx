@@ -7,6 +7,8 @@ import {
   Suspense,
 } from "react";
 import {
+  Hand,
+  ClipboardPaste,
   Layers3,
   Plus,
   FolderOpen,
@@ -34,6 +36,8 @@ import {
   imageObject,
   MAX_LAYERS,
   MAX_OBJECTS,
+  outputSize,
+  type BrushType,
   type Project,
   type Assets,
 } from "./model";
@@ -47,15 +51,45 @@ import {
   restoreLocal,
 } from "./io";
 import { exportFlat, exportLayers } from "./raster";
-import { makeDemo } from "./demo";
+import { makeDemo, makeBrushDemo } from "./demo";
 import Editor, { type Tool } from "./components/Editor";
 import Properties from "./components/Properties";
 import LayerList from "./components/LayerList";
 import NewProject from "./components/NewProject";
+import { usePreferences } from "./preferences";
+import { BRUSHES } from "./brushes";
+import { missingFonts, releaseUnusedFonts } from "./fonts";
+import { MissingFonts } from "./components/FontPicker";
+import BrushPad from "./components/BrushPad";
 const Preview = lazy(() => import("./components/Preview"));
 export default function App() {
   const s = useStudio();
   const p = s.project;
+  const prefs = usePreferences();
+  const [brushType, setBrushType] = useState<BrushType>("round"),
+    [eraseMode, setEraseMode] = useState<"stroke" | "partial">("partial");
+  const [pending, setPending] = useState<{
+    project: Project;
+    assets: Assets;
+  } | null>(null);
+  const busyRef = useRef(false);
+  const dims = outputSize(p, prefs.exportEdge);
+  useEffect(() => {
+    const m = matchMedia("(prefers-color-scheme: dark)");
+    const apply = () =>
+      (document.documentElement.dataset.theme =
+        prefs.theme === "system"
+          ? m.matches
+            ? "dark"
+            : "light"
+          : prefs.theme);
+    apply();
+    m.addEventListener("change", apply);
+    return () => m.removeEventListener("change", apply);
+  }, [prefs.theme]);
+  useEffect(() => {
+    releaseUnusedFonts(p.fonts);
+  }, [p.id]);
   const [mode, setMode] = useState<"2d" | "3d">("2d"),
     [tool, setTool] = useState<Tool>("select"),
     [color, setColor] = useState("#215d71"),
@@ -176,12 +210,15 @@ export default function App() {
       s.select(p.layers.at(-1)!.id);
   }, [p, s.layerId]);
   const run = async (fn: () => Promise<void>) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     try {
       await fn();
     } catch (e) {
       notify(String(e));
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
   };
@@ -189,7 +226,7 @@ export default function App() {
     run(async () => {
       const state = useStudio.getState();
       download(
-        await packProject(state.project, state.assets),
+        await packProject(state.project, state.assets, prefs.embedFonts),
         `${safeName(state.project.name)}.acrylic.zip`,
       );
       notify("ดาวน์โหลดโปรเจกต์แล้ว เปิดแก้ไขต่อได้จากเมนูเปิดงาน");
@@ -207,7 +244,7 @@ export default function App() {
   }
   async function importFiles(files: File[]) {
     const token = loadToken.current;
-    const target = s.layerId;
+    const target = useStudio.getState().layerId;
     if (!files.length) return;
     const current = useStudio.getState();
     if (
@@ -236,7 +273,8 @@ export default function App() {
     );
     if (size > 100e6) throw new Error("รูปทั้งหมดต้องไม่เกิน 100 MB");
     s.addAssets(additions);
-    let last = target;
+    let last = target,
+      lastObject = "";
     s.change((p) => {
       for (const a of imported) {
         let l = intoLayer ? p.layers.find((l) => l.id === target) : undefined;
@@ -249,15 +287,74 @@ export default function App() {
           }
           l.name = a.name;
         }
-        l.objects.push(imageObject(a, p));
+        const obj = imageObject(a, p);
+        l.objects.push(obj);
+        lastObject = obj.id;
         last = l.id;
       }
       distribute(p);
     });
-    s.select(last);
+    s.select(last, lastObject);
     setMode("2d");
     notify("นำเข้ารูปเรียบร้อย");
   }
+  async function pasteClipboard() {
+    if (!navigator.clipboard?.read)
+      throw Error(
+        "เบราว์เซอร์นี้ไม่รองรับปุ่มวางรูป ใช้ Ctrl/Cmd+V หรือนำเข้าไฟล์แทน",
+      );
+    try {
+      const items = await navigator.clipboard.read();
+      const files: File[] = [];
+      for (const item of items) {
+        const type = item.types.find((t) =>
+          ["image/png", "image/jpeg", "image/webp"].includes(t),
+        );
+        if (type)
+          files.push(
+            new File(
+              [await item.getType(type)],
+              "clipboard." + type.split("/")[1],
+              { type },
+            ),
+          );
+      }
+      if (!files.length)
+        throw Error(
+          "คลิปบอร์ดไม่มีไฟล์ภาพ ลองคัดลอกรูปภาพแทนลิงก์ หรือนำเข้าไฟล์",
+        );
+      await importFiles(files);
+    } catch (e) {
+      throw Error(
+        "วางรูปไม่ได้: " +
+          String(e) +
+          " — ลองใช้เมนูคัดลอกรูปภาพ หรือนำเข้าไฟล์",
+      );
+    }
+  }
+  useEffect(() => {
+    const paste = (e: ClipboardEvent) => {
+      if (
+        newOpen ||
+        pending ||
+        mode !== "2d" ||
+        (e.target as HTMLElement).closest(
+          "input,textarea,select,[contenteditable]",
+        )
+      )
+        return;
+      const files = Array.from(e.clipboardData?.files || []).filter((f) =>
+        f.type.startsWith("image/"),
+      );
+      if (files.length) {
+        e.preventDefault();
+        void run(() => importFiles(files));
+      } else if (e.clipboardData?.getData("text/plain"))
+        notify("คลิปบอร์ดเป็นข้อความหรือลิงก์ กรุณาคัดลอกรูปภาพหรือนำเข้าไฟล์");
+    };
+    window.addEventListener("paste", paste);
+    return () => window.removeEventListener("paste", paste);
+  }, [newOpen, pending, mode, intoLayer, s.layerId]);
   function addText() {
     const l = p.layers.find((l) => l.id === s.layerId);
     if (!l || l.locked) {
@@ -273,9 +370,9 @@ export default function App() {
       x: p.width * 0.15,
       y: p.height * 0.15,
       width: p.width * 0.7,
-      height: 150,
+      height: p.height * 0.2,
       text: "ข้อความของคุณ",
-      fontSize: Math.round(p.width * 0.06),
+      fontSize: p.width * 0.06,
       fontFamily: "Noto Sans Thai",
       align: "left" as const,
       fill: color,
@@ -356,10 +453,39 @@ export default function App() {
             </button>
             {exports && (
               <div className="dropdown">
+                <label className="field">
+                  ความละเอียดส่งออก
+                  <select
+                    aria-label="ความละเอียดส่งออก"
+                    value={prefs.exportEdge}
+                    onChange={(e) => prefs.set({ exportEdge: +e.target.value })}
+                  >
+                    <option value={1024}>1K</option>
+                    <option value={2048}>2K</option>
+                    <option value={4096}>4K</option>
+                  </select>
+                </label>
+                <small>
+                  {dims.width} × {dims.height} px · ภาพ 2D
+                </small>
+                <small>
+                  เพิ่มพิกเซลไม่เพิ่มรายละเอียดของภาพต้นฉบับที่มีขนาดเล็ก
+                </small>
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={prefs.embedFonts}
+                    onChange={(e) =>
+                      prefs.set({ embedFonts: e.target.checked })
+                    }
+                  />
+                  ฝังฟอนต์ในโปรเจกต์ ZIP
+                </label>
+                <small>ฝังเฉพาะฟอนต์ที่มีสิทธิ์แจกจ่าย</small>
                 <button
                   onClick={() => {
                     setExports(false);
-                    void run(() => exportFlat(p, s.assets));
+                    void run(() => exportFlat(p, s.assets, prefs.exportEdge));
                   }}
                 >
                   PNG · ภาพด้านหน้า
@@ -367,7 +493,7 @@ export default function App() {
                 <button
                   onClick={() => {
                     setExports(false);
-                    void run(() => exportLayers(p, s.assets));
+                    void run(() => exportLayers(p, s.assets, prefs.exportEdge));
                   }}
                 >
                   ZIP · ภาพแยกทุกชั้น
@@ -435,6 +561,51 @@ export default function App() {
               ข้อความ
             </button>
           </div>
+          <div className="studio-settings">
+            <label className="field">
+              ธีม
+              <select
+                aria-label="ธีม"
+                value={prefs.theme}
+                onChange={(e) => prefs.set({ theme: e.target.value as any })}
+              >
+                <option value="light">สว่าง</option>
+                <option value="dark">มืด</option>
+                <option value="system">ตามระบบ</option>
+              </select>
+            </label>
+            <label className="field">
+              พื้นโต๊ะทำงาน
+              <select
+                aria-label="พื้นโต๊ะทำงาน"
+                value={prefs.desk}
+                onChange={(e) => prefs.set({ desk: e.target.value as any })}
+              >
+                <option value="checker">ตารางโปร่งใส</option>
+                <option value="white">ขาว</option>
+                <option value="gray">เทา</option>
+                <option value="black">ดำ</option>
+              </select>
+            </label>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={prefs.snap}
+                onChange={(e) => prefs.set({ snap: e.target.checked })}
+              />
+              ดูดติดกึ่งกลางและขอบ
+            </label>
+            <button
+              className={tool === "pan" ? "wide active" : "wide"}
+              onClick={() => {
+                setTool("pan");
+                setMode("2d");
+              }}
+            >
+              <Hand size={17} />
+              เลื่อนพื้นที่ · Space
+            </button>
+          </div>
           <div className="import-block">
             <button
               className="wide"
@@ -443,6 +614,10 @@ export default function App() {
             >
               <ImagePlus size={17} />
               เพิ่มรูปภาพ
+            </button>
+            <button className="wide" onClick={() => void run(pasteClipboard)}>
+              <ClipboardPaste size={17} />
+              วางจากคลิปบอร์ด
             </button>
             <label className="check">
               <input
@@ -453,8 +628,47 @@ export default function App() {
               เพิ่มลงชั้นที่เลือก
             </label>
           </div>
-          {tool !== "select" && (
+          {(tool === "pen" || tool === "eraser") && (
             <div className="brush-controls">
+              {tool === "pen" && (
+                <>
+                  <label className="field">
+                    หัวปากกา
+                    <select
+                      aria-label="หัวปากกา"
+                      value={brushType}
+                      onChange={(e) =>
+                        setBrushType(e.target.value as BrushType)
+                      }
+                    >
+                      {BRUSHES.map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <BrushPad
+                    brushType={brushType}
+                    color={color}
+                    opacity={inkOpacity}
+                    size={brush}
+                  />
+                </>
+              )}
+              {tool === "eraser" && (
+                <label className="field">
+                  วิธีลบ
+                  <select
+                    aria-label="วิธีลบ"
+                    value={eraseMode}
+                    onChange={(e) => setEraseMode(e.target.value as any)}
+                  >
+                    <option value="partial">ลบบางส่วนของเส้น</option>
+                    <option value="stroke">ลบทั้งเส้น</option>
+                  </select>
+                </label>
+              )}
               <label>
                 สี{" "}
                 <input
@@ -488,11 +702,22 @@ export default function App() {
                 />
               </label>
               {tool === "eraser" && (
-                <small>แตะเส้นเพื่อลบทั้งเส้น · รูปและข้อความไม่ถูกลบ</small>
+                <small>ลากบนเส้นวาดเพื่อลบ · รูปและข้อความไม่ถูกลบ</small>
               )}
             </div>
           )}
           <LayerList onError={notify} />
+          <button
+            className="demo-button"
+            onClick={() => {
+              if (canReplace()) {
+                const d = makeBrushDemo();
+                create(d.project, d.assets);
+              }
+            }}
+          >
+            ตัวอย่างหัวปากกาและพื้นหลัง
+          </button>
           <button
             className="demo-button"
             onClick={() => {
@@ -527,13 +752,27 @@ export default function App() {
               {mode === "2d" ? "ทุกภาพ มีมิติของตัวเอง" : "มุมมองใหม่ของงานคุณ"}
             </span>
           </div>
-          <div className="canvas-area">
+          <div
+            className="canvas-area"
+            onDragOver={(e) => {
+              e.preventDefault();
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              const files = Array.from(e.dataTransfer.files);
+              if (files.length) void run(() => importFiles(files));
+            }}
+          >
             {mode === "2d" ? (
               <Editor
                 tool={tool}
                 color={color}
                 brush={brush}
                 inkOpacity={inkOpacity}
+                brushType={brushType}
+                eraseMode={eraseMode}
+                onMore={() => setMobile("props")}
+                onError={notify}
               />
             ) : (
               <Suspense
@@ -578,7 +817,7 @@ export default function App() {
             <X />
             ปิดคุณสมบัติ
           </button>
-          <Properties />
+          <Properties onError={notify} />
         </div>
       </div>
       <nav className="mobile-nav">
@@ -618,10 +857,24 @@ export default function App() {
           if (!file) return;
           void run(async () => {
             const next = await unpackProject(file);
-            if (canReplace()) create(next.project, next.assets);
+            if (canReplace()) {
+              if (missingFonts(next.project).length) setPending(next);
+              else create(next.project, next.assets);
+            }
           });
         }}
       />
+      {pending && (
+        <MissingFonts
+          value={pending}
+          onCancel={() => setPending(null)}
+          onOpen={(p, a) => {
+            setPending(null);
+            create(p, a);
+          }}
+          onError={notify}
+        />
+      )}
       {newOpen && (
         <NewProject
           onClose={() => setNewOpen(false)}

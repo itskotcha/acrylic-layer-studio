@@ -1,45 +1,64 @@
 import { useEffect, useRef, useState } from "react";
-import {
-  Stage,
-  Layer,
-  Group,
-  Image as KImage,
-  Text,
-  Line,
-  Transformer,
-  Rect,
-} from "react-konva";
+import { Stage, Layer, Group, Transformer, Rect, Line } from "react-konva";
 import Konva from "konva";
-import { useStudio } from "../store";
-import { baseObject, type ArtObject, type Asset } from "../model";
-import { loadImage } from "../io";
-export type Tool = "select" | "pen" | "eraser";
-function ImageNode({
-  asset,
-  ...props
-}: { asset: Asset } & Record<string, any>) {
-  const [image, setImage] = useState<HTMLImageElement>();
-  useEffect(() => {
-    let active = true;
-    loadImage(asset.data).then((im) => {
-      if (active) setImage(im);
-    });
-    return () => {
-      active = false;
-    };
-  }, [asset.data]);
-  return <KImage {...props} image={image} />;
+import {
+  Lock,
+  Unlock,
+  Copy,
+  Trash2,
+  MoreHorizontal,
+  Hand,
+  Undo2,
+} from "lucide-react";
+import { useStudio, duplicateObject, deleteObject } from "../store";
+import { usePreferences } from "../preferences";
+import {
+  baseObject,
+  scaleObject,
+  type ArtObject,
+  type BrushType,
+} from "../model";
+import { normalizeStroke, toLocal, nearStroke } from "../brushes";
+import ArtNode from "./ArtNode";
+export type Tool = "select" | "pen" | "eraser" | "pan";
+function bounds(o: ArtObject) {
+  const r = (o.rotation * Math.PI) / 180;
+  const pts = [
+    [0, 0],
+    [o.width, 0],
+    [o.width, o.height],
+    [0, o.height],
+  ].map(([x, y]) => ({
+    x: o.x + x * Math.cos(r) - y * Math.sin(r),
+    y: o.y + x * Math.sin(r) + y * Math.cos(r),
+  }));
+  const x = Math.min(...pts.map((p) => p.x)),
+    y = Math.min(...pts.map((p) => p.y));
+  return {
+    x,
+    y,
+    width: Math.max(...pts.map((p) => p.x)) - x,
+    height: Math.max(...pts.map((p) => p.y)) - y,
+  };
 }
 export default function Editor({
   tool,
   color,
   brush,
   inkOpacity,
+  brushType,
+  eraseMode,
+  onMore,
+  onError,
 }: {
   tool: Tool;
   color: string;
   brush: number;
   inkOpacity: number;
+  brushType: BrushType;
+  eraseMode: "stroke" | "partial";
+  onMore: () => void;
+  onError: (s: string) => void;
 }) {
   const {
     project: p,
@@ -49,14 +68,26 @@ export default function Editor({
     select,
     change,
     patchObject,
+    undo,
+    past,
   } = useStudio();
-  const wrap = useRef<HTMLDivElement>(null);
-  const stage = useRef<Konva.Stage>(null);
-  const tr = useRef<Konva.Transformer>(null);
-  const [size, setSize] = useState({ w: 600, h: 700 });
-  const [zoom, setZoom] = useState(1);
-  const [draft, setDraft] = useState<ArtObject | null>(null);
-  const drawing = useRef<ArtObject | null>(null);
+  const pref = usePreferences();
+  const wrap = useRef<HTMLDivElement>(null),
+    stage = useRef<Konva.Stage>(null),
+    tr = useRef<Konva.Transformer>(null);
+  const [size, setSize] = useState({ w: 600, h: 700 }),
+    [view, setView] = useState({ zoom: 1, px: 0, py: 0 }),
+    [space, setSpace] = useState(false),
+    [draft, setDraft] = useState<ArtObject | null>(null),
+    [guides, setGuides] = useState<{ x?: number; y?: number }>({}),
+    [menuTick, setMenuTick] = useState(0);
+  const drawing = useRef<ArtObject | null>(null),
+    erase = useRef<number[] | null>(null),
+    pan = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
+  const pointers = useRef(new Map<number, { x: number; y: number }>()),
+    multi = useRef(false),
+    pinch = useRef<{ distance: number; cx: number; cy: number } | null>(null);
+  const [erasePreview, setErasePreview] = useState<number[]>([]);
   useEffect(() => {
     const ro = new ResizeObserver(([e]) =>
       setSize({ w: e.contentRect.width, h: e.contentRect.height }),
@@ -64,161 +95,390 @@ export default function Editor({
     if (wrap.current) ro.observe(wrap.current);
     return () => ro.disconnect();
   }, []);
-  const fit = Math.min((size.w - 80) / p.width, (size.h - 90) / p.height);
-  const scale = Math.max(0.03, fit) * zoom;
-  const x = (size.w - p.width * scale) / 2,
-    y = (size.h - p.height * scale) / 2;
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (
+        e.code === "Space" &&
+        !(e.target as HTMLElement).closest(
+          "input,textarea,select,[contenteditable]",
+        )
+      ) {
+        e.preventDefault();
+        setSpace(e.type === "keydown");
+      }
+    };
+    const blur = () => setSpace(false);
+    window.addEventListener("keydown", key);
+    window.addEventListener("keyup", key);
+    window.addEventListener("blur", blur);
+    return () => {
+      window.removeEventListener("keydown", key);
+      window.removeEventListener("keyup", key);
+      window.removeEventListener("blur", blur);
+    };
+  }, []);
+  const fit = Math.max(
+      0.001,
+      Math.min((size.w - 64) / p.width, (size.h - 110) / p.height),
+    ),
+    scale = fit * view.zoom,
+    x = (size.w - p.width * scale) / 2 + view.px,
+    y = (size.h - p.height * scale) / 2 + view.py;
+  const stateRef = useRef({ scale, x, y, view, fit });
+  stateRef.current = { scale, x, y, view, fit };
+  const selectedLayer = p.layers.find((l) => l.id === layerId),
+    selected = selectedLayer?.objects.find((o) => o.id === objectId);
+  const locked = !!(selected?.locked || selectedLayer?.locked);
+  const effectiveTool = space ? "pan" : tool;
   useEffect(() => {
     const node = objectId ? stage.current?.findOne("#" + objectId) : null;
-    const l = p.layers.find((l) => l.id === layerId);
     tr.current?.nodes(
-      node && tool === "select" && !l?.locked && l?.visible ? [node] : [],
+      node &&
+        effectiveTool === "select" &&
+        !locked &&
+        selectedLayer?.visible &&
+        selected?.type !== "background"
+        ? [node]
+        : [],
     );
-  }, [objectId, p, tool, layerId]);
-  const point = () => {
-    const pt = stage.current?.getPointerPosition();
-    return pt ? { x: (pt.x - x) / scale, y: (pt.y - y) / scale } : null;
-  };
-  function finish() {
-    const o = drawing.current;
-    if (!o) return;
+  }, [objectId, p, effectiveTool, locked, layerId]);
+  useEffect(() => {
     drawing.current = null;
+    erase.current = null;
     setDraft(null);
-    change((p) => {
-      const l = p.layers.find((l) => l.id === layerId);
-      if (
-        l &&
-        !l.locked &&
-        l.visible &&
-        p.layers.reduce((n, l) => n + l.objects.length, 0) < 500
-      )
-        l.objects.push(o);
+    setErasePreview([]);
+    setView({ zoom: 1, px: 0, py: 0 });
+  }, [p.id]);
+  const client = (e: PointerEvent | WheelEvent) => {
+    const r = wrap.current!.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  };
+  const point = (e: PointerEvent) => {
+    const pt = client(e);
+    return { x: (pt.x - x) / scale, y: (pt.y - y) / scale };
+  };
+  function zoomAt(next: number, cx = size.w / 2, cy = size.h / 2) {
+    const current = stateRef.current;
+    const z = Math.max(0.25, Math.min(8, next)),
+      ns = current.fit * z,
+      ux = (cx - current.x) / current.scale,
+      uy = (cy - current.y) / current.scale;
+    setView({
+      zoom: z,
+      px: cx - ux * ns - (size.w - p.width * ns) / 2,
+      py: cy - uy * ns - (size.h - p.height * ns) / 2,
     });
   }
-  function eraseAt() {
-    const pt = point();
-    if (!pt) return;
-    change((p) => {
-      const l = p.layers.find((l) => l.id === layerId);
-      if (!l || l.locked) return;
-      l.objects = l.objects.filter((o) => {
-        if (o.type !== "stroke") return true;
-        const node = stage.current?.findOne("#" + o.id);
-        if (!node) return true;
-        const local = node
-          .getAbsoluteTransform()
-          .copy()
-          .invert()
-          .point(stage.current!.getPointerPosition()!);
-        const pts = o.points!;
-        const radius = brush + o.strokeWidth! / 2;
-        for (let i = 2; i < pts.length; i += 2) {
-          const ax = pts[i - 2],
-            ay = pts[i - 1],
-            bx = pts[i],
-            by = pts[i + 1],
-            dx = bx - ax,
-            dy = by - ay;
-          const t = Math.max(
-            0,
-            Math.min(
-              1,
-              ((local.x - ax) * dx + (local.y - ay) * dy) /
-                (dx * dx + dy * dy || 1),
-            ),
-          );
-          if (Math.hypot(local.x - ax - t * dx, local.y - ay - t * dy) < radius)
-            return false;
-        }
-        return true;
+  function cancelDrawing() {
+    drawing.current = null;
+    erase.current = null;
+    pan.current = null;
+    setDraft(null);
+    setErasePreview([]);
+    setGuides({});
+  }
+  function finish() {
+    if (multi.current) {
+      cancelDrawing();
+      return;
+    }
+    const o = drawing.current,
+      er = erase.current;
+    cancelDrawing();
+    if (o) {
+      change((p) => {
+        const l = p.layers.find((l) => l.id === layerId);
+        if (
+          l &&
+          !l.locked &&
+          l.visible &&
+          p.layers.reduce((n, l) => n + l.objects.length, 0) < 500
+        )
+          l.objects.push(normalizeStroke(o));
       });
-    });
+    }
+    if (er) {
+      const radius = (brush * Math.max(p.width, p.height)) / 1000;
+      change((p) => {
+        const l = p.layers.find((l) => l.id === layerId);
+        if (!l || l.locked || !l.visible) return;
+        l.objects = l.objects.filter((o) => {
+          if (o.type !== "stroke" || o.locked || !nearStroke(o, er, radius / 2))
+            return true;
+          if (eraseMode === "stroke") return false;
+          if ((o.erasures?.length || 0) >= 500) return true;
+          const pts: number[] = [];
+          for (let i = 0; i < er.length; i += 2) {
+            const q = toLocal(o, er[i], er[i + 1]);
+            pts.push(q.x, q.y);
+          }
+          o.erasures = [...(o.erasures || []), { points: pts, width: radius }];
+          return true;
+        });
+      });
+    }
   }
-  const common = (o: ArtObject, lid: string, locked: boolean) => ({
-    ...o,
+  const common = (o: ArtObject, lid: string, llocked: boolean) => ({
     id: o.id,
-    draggable: tool === "select" && !locked,
+    draggable:
+      effectiveTool === "select" &&
+      !llocked &&
+      !o.locked &&
+      o.type !== "background",
     onClick: () => {
-      if (tool === "select") select(lid, o.id);
+      if (effectiveTool === "select") select(lid, o.id);
+    },
+    onPointerClick: () => {
+      if (effectiveTool === "select") select(lid, o.id);
     },
     onTap: () => {
-      if (tool === "select") select(lid, o.id);
+      if (effectiveTool === "select") select(lid, o.id);
     },
     onDragStart: () => select(lid, o.id),
-    onDragEnd: (e: Konva.KonvaEventObject<DragEvent>) => {
+    onDragMove: (e: any) => {
+      const n = e.target;
+      if (!pref.snap) {
+        setMenuTick((v) => v + 1);
+        return;
+      }
+      const b = bounds({ ...o, x: n.x(), y: n.y() }),
+        tx = [0, p.width / 2, p.width],
+        ty = [0, p.height / 2, p.height];
+      for (const l of p.layers)
+        if (l.visible)
+          for (const other of l.objects)
+            if (other.id !== o.id && other.type !== "background") {
+              const z = bounds(other);
+              tx.push(z.x, z.x + z.width / 2, z.x + z.width);
+              ty.push(z.y, z.y + z.height / 2, z.y + z.height);
+            }
+      const find = (own: number[], target: number[]) => {
+        let best = 6 / scale;
+        let delta = 0,
+          guide: number | undefined;
+        for (const a of own)
+          for (const b of target)
+            if (Math.abs(b - a) < best) {
+              best = Math.abs(b - a);
+              delta = b - a;
+              guide = b;
+            }
+        return { delta, guide };
+      };
+      const sx = find([b.x, b.x + b.width / 2, b.x + b.width], tx),
+        sy = find([b.y, b.y + b.height / 2, b.y + b.height], ty);
+      n.position({ x: n.x() + sx.delta, y: n.y() + sy.delta });
+      setGuides({ x: sx.guide, y: sy.guide });
+      setMenuTick((v) => v + 1);
+    },
+    onDragEnd: (e: any) => {
+      if (multi.current) {
+        e.target.position({ x: o.x, y: o.y });
+        return;
+      }
       select(lid, o.id);
       patchObject({ x: e.target.x(), y: e.target.y() });
+      setGuides({});
     },
-    onTransformEnd: (e: Konva.KonvaEventObject<Event>) => {
+    onTransform: () => setMenuTick((v) => v + 1),
+    onTransformEnd: (e: any) => {
       const n = e.target;
-      const sx = n.scaleX(),
-        sy = n.scaleY();
-      n.scaleX(1);
-      n.scaleY(1);
-      const patch: Partial<ArtObject> = {
-        x: n.x(),
-        y: n.y(),
-        rotation: n.rotation(),
-        width: Math.max(4, o.width * sx),
-        height: Math.max(4, o.height * sy),
-      };
-      if (o.type === "stroke")
-        patch.points = o.points!.map((v, i) => v * (i % 2 ? sy : sx));
-      if (o.type === "text") patch.fontSize = Math.max(1, o.fontSize! * sy);
-      patchObject(patch);
+      if (multi.current) {
+        n.position({ x: o.x, y: o.y });
+        n.scale({ x: 1, y: 1 });
+        n.rotation(o.rotation);
+        return;
+      }
+      const scaled = scaleObject(o, n.scaleX(), n.scaleY());
+      n.scale({ x: 1, y: 1 });
+      patchObject({ ...scaled, x: n.x(), y: n.y(), rotation: n.rotation() });
     },
   });
+  let menu = { x: 12, y: 12 };
+  const node = objectId ? stage.current?.findOne("#" + objectId) : null;
+  if (node) {
+    const b = node.getClientRect();
+    menu = {
+      x: Math.max(8, Math.min(size.w - 220, b.x + b.width / 2 - 106)),
+      y: Math.max(
+        8,
+        Math.min(size.h - 100, b.y >= 66 ? b.y - 58 : b.y + b.height + 12),
+      ),
+    };
+  }
+  void menuTick;
+  function captureDown(e: React.PointerEvent<HTMLDivElement>) {
+    if ((e.target as HTMLElement).closest("button,select")) return;
+    pointers.current.set(e.pointerId, client(e.nativeEvent));
+    if (pointers.current.size === 2) {
+      multi.current = true;
+      cancelDrawing();
+      stage.current?.find("Shape").forEach((n) => {
+        if (n.isDragging()) n.stopDrag();
+      });
+      tr.current?.stopTransform();
+      const [a, b] = [...pointers.current.values()];
+      pinch.current = {
+        distance: Math.hypot(a.x - b.x, a.y - b.y),
+        cx: (a.x + b.x) / 2,
+        cy: (a.y + b.y) / 2,
+      };
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }
+  function captureMove(e: React.PointerEvent<HTMLDivElement>) {
+    if (!pointers.current.has(e.pointerId)) return;
+    pointers.current.set(e.pointerId, client(e.nativeEvent));
+    if (multi.current) {
+      e.preventDefault();
+      e.stopPropagation();
+      const pts = [...pointers.current.values()];
+      if (pts.length === 2) {
+        const [a, b] = pts,
+          next = {
+            distance: Math.hypot(a.x - b.x, a.y - b.y),
+            cx: (a.x + b.x) / 2,
+            cy: (a.y + b.y) / 2,
+          },
+          prev = pinch.current;
+        if (prev) {
+          const st = stateRef.current,
+            z = Math.max(
+              0.25,
+              Math.min(
+                8,
+                (st.view.zoom * next.distance) / (prev.distance || 1),
+              ),
+            ),
+            ns = st.fit * z,
+            ux = (prev.cx - st.x) / st.scale,
+            uy = (prev.cy - st.y) / st.scale;
+          setView({
+            zoom: z,
+            px: next.cx - ux * ns - (size.w - p.width * ns) / 2,
+            py: next.cy - uy * ns - (size.h - p.height * ns) / 2,
+          });
+        }
+        pinch.current = next;
+      }
+    }
+  }
+  function captureUp(e: React.PointerEvent<HTMLDivElement>) {
+    pointers.current.delete(e.pointerId);
+    if (multi.current) {
+      e.stopPropagation();
+      if (!pointers.current.size) {
+        multi.current = false;
+        pinch.current = null;
+      }
+      return;
+    }
+  }
   return (
-    <div className={"editor-wrap " + tool} ref={wrap} data-testid="editor">
+    <div
+      className={"editor-wrap " + effectiveTool + " desk-" + pref.desk}
+      ref={wrap}
+      data-testid="editor"
+      onPointerDownCapture={captureDown}
+      onPointerMoveCapture={captureMove}
+      onPointerUpCapture={captureUp}
+      onPointerCancelCapture={(e) => {
+        captureUp(e);
+        cancelDrawing();
+      }}
+    >
+      <div
+        className={"artboard desk-" + pref.desk}
+        style={{
+          left: x,
+          top: y,
+          width: p.width * scale,
+          height: p.height * scale,
+        }}
+      />
       <Stage
         ref={stage}
         width={size.w}
         height={size.h}
+        onWheel={(e) => {
+          e.evt.preventDefault();
+          const pt = client(e.evt);
+          zoomAt(view.zoom * Math.exp(-e.evt.deltaY * 0.002), pt.x, pt.y);
+        }}
         onPointerDown={(e) => {
-          const l = p.layers.find((l) => l.id === layerId);
-          if (tool === "select") {
+          if (multi.current) return;
+          const ev = e.evt as PointerEvent;
+          try {
+            (ev.target as Element).setPointerCapture(ev.pointerId);
+          } catch {}
+          const pt = point(ev);
+          if (effectiveTool === "pan") {
+            const c = client(ev);
+            pan.current = { x: c.x, y: c.y, px: view.px, py: view.py };
+            return;
+          }
+          if (effectiveTool === "select") {
             if (e.target === e.target.getStage() || e.target.name() === "paper")
               select(layerId);
             return;
           }
-          if (!l || l.locked || !l.visible) return;
-          if (tool === "eraser") {
-            eraseAt();
+          if (
+            !selectedLayer ||
+            selectedLayer.locked ||
+            !selectedLayer.visible
+          ) {
+            onError("เลือกชั้นที่ไม่ล็อกและเปิดแสดงก่อนวาด");
             return;
           }
-          const pt = point();
-          if (!pt || pt.x < 0 || pt.y < 0 || pt.x > p.width || pt.y > p.height)
+          if (pt.x < 0 || pt.y < 0 || pt.x > p.width || pt.y > p.height) return;
+          if (tool === "eraser") {
+            erase.current = [pt.x, pt.y, pt.x + 0.001, pt.y + 0.001];
+            setErasePreview(erase.current);
             return;
+          }
           drawing.current = {
             ...baseObject("stroke"),
-            x: 0,
-            y: 0,
             width: p.width,
             height: p.height,
-            points: [pt.x, pt.y, pt.x + 0.01, pt.y + 0.01],
+            points: [pt.x, pt.y, pt.x + 0.001, pt.y + 0.001],
             fill: color,
-            strokeWidth: brush,
+            strokeWidth: (brush * Math.max(p.width, p.height)) / 1000,
             opacity: inkOpacity,
+            brushType,
+            brushVersion: 1,
+            seed: Math.floor(Math.random() * 1e9),
+            erasures: [],
           };
           setDraft({ ...drawing.current });
-          const ev = e.evt as PointerEvent;
-          if (ev.pointerId !== undefined)
-            try {
-              (ev.target as Element).setPointerCapture(ev.pointerId);
-            } catch {}
         }}
-        onPointerMove={() => {
-          const pt = point();
-          if (!drawing.current || !pt) return;
-          if (drawing.current.points!.length >= 40000) return;
-          drawing.current.points!.push(pt.x, pt.y);
-          setDraft({
-            ...drawing.current,
-            points: [...drawing.current.points!],
-          });
+        onPointerMove={(e) => {
+          if (multi.current) return;
+          const ev = e.evt as PointerEvent;
+          if (pan.current) {
+            const pt = client(ev);
+            setView((v) => ({
+              ...v,
+              px: pan.current!.px + pt.x - pan.current!.x,
+              py: pan.current!.py + pt.y - pan.current!.y,
+            }));
+            return;
+          }
+          const pt = point(ev);
+          if (erase.current && erase.current.length < 40000) {
+            erase.current.push(pt.x, pt.y);
+            setErasePreview([...erase.current]);
+          }
+          if (drawing.current && drawing.current.points!.length < 40000) {
+            drawing.current.points!.push(pt.x, pt.y);
+            setDraft({
+              ...drawing.current,
+              points: [...drawing.current.points!],
+            });
+          }
         }}
         onPointerUp={finish}
-        onPointerCancel={finish}
+        onPointerCancel={cancelDrawing}
       >
         <Layer>
           <Rect
@@ -227,10 +487,7 @@ export default function Editor({
             y={y}
             width={p.width * scale}
             height={p.height * scale}
-            fill="#fff"
-            shadowBlur={25}
-            shadowColor="#233c48"
-            shadowOpacity={0.15}
+            fill="rgba(0,0,0,0)"
           />
           <Group
             x={x}
@@ -246,75 +503,138 @@ export default function Editor({
               .filter((l) => l.visible)
               .map((l) => (
                 <Group key={l.id}>
-                  {l.objects.map((o) =>
-                    o.type === "image" ? (
-                      <ImageNode
-                        key={o.id}
-                        asset={assets[o.assetId!]}
-                        {...common(o, l.id, l.locked)}
-                      />
-                    ) : o.type === "text" ? (
-                      <Text
-                        key={o.id}
-                        {...common(o, l.id, l.locked)}
-                        lineHeight={1.3}
-                      />
-                    ) : (
-                      <Line
-                        key={o.id}
-                        {...common(o, l.id, l.locked)}
-                        stroke={o.fill}
-                        lineCap="round"
-                        lineJoin="round"
-                        fillEnabled={false}
-                      />
-                    ),
-                  )}
+                  {l.objects.map((o) => (
+                    <ArtNode
+                      key={o.id}
+                      o={o}
+                      assets={assets}
+                      scale={scale * Math.min(devicePixelRatio, 2)}
+                      {...common(o, l.id, l.locked)}
+                    />
+                  ))}
                   {draft && l.id === layerId && (
-                    <Line
-                      {...draft}
-                      stroke={draft.fill}
-                      lineCap="round"
-                      lineJoin="round"
-                      fillEnabled={false}
+                    <ArtNode
+                      o={normalizeStroke(draft)}
+                      assets={{}}
+                      scale={scale * Math.min(devicePixelRatio, 2)}
                       listening={false}
                     />
                   )}
                 </Group>
               ))}
+            {erasePreview.length > 0 && (
+              <Line
+                points={erasePreview}
+                stroke="#f28fa6"
+                opacity={0.5}
+                strokeWidth={(brush * Math.max(p.width, p.height)) / 1000}
+                lineCap="round"
+                lineJoin="round"
+                listening={false}
+              />
+            )}
+            {guides.x !== undefined && (
+              <Line
+                points={[guides.x, 0, guides.x, p.height]}
+                stroke="#a89bff"
+                strokeWidth={1 / scale}
+                listening={false}
+              />
+            )}
+            {guides.y !== undefined && (
+              <Line
+                points={[0, guides.y, p.width, guides.y]}
+                stroke="#a89bff"
+                strokeWidth={1 / scale}
+                listening={false}
+              />
+            )}
           </Group>
           <Transformer
             ref={tr}
             keepRatio
             flipEnabled={false}
             rotateEnabled
-            borderStroke="#267d83"
-            anchorStroke="#267d83"
-            anchorSize={9}
-            boundBoxFunc={(old, b) =>
-              Math.abs(b.width) < 5 || Math.abs(b.height) < 5 ? old : b
+            borderStroke="#8273ee"
+            anchorStroke="#8273ee"
+            anchorSize={10}
+            rotateAnchorOffset={28}
+            boundBoxFunc={(a, b) =>
+              Math.abs(b.width) < 3 || Math.abs(b.height) < 3 ? a : b
             }
           />
         </Layer>
       </Stage>
+      {selected &&
+        selected.type !== "background" &&
+        selectedLayer?.visible &&
+        effectiveTool === "select" && (
+          <div
+            className="object-toolbar"
+            data-testid="object-toolbar"
+            style={{ left: menu.x, top: menu.y }}
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <button
+              aria-label={selected.locked ? "ปลดล็อกวัตถุ" : "ล็อกวัตถุ"}
+              disabled={selectedLayer.locked}
+              onClick={() => patchObject({ locked: !selected.locked })}
+            >
+              {selected.locked ? <Unlock size={18} /> : <Lock size={18} />}
+            </button>
+            <button
+              aria-label="ทำสำเนาวัตถุ"
+              disabled={selectedLayer.locked}
+              onClick={duplicateObject}
+            >
+              <Copy size={18} />
+            </button>
+            <button
+              aria-label="ลบวัตถุที่เลือก"
+              disabled={locked}
+              onClick={() => {
+                deleteObject();
+                onError("ลบวัตถุแล้ว · กด Undo เพื่อคืนกลับ");
+              }}
+            >
+              <Trash2 size={18} />
+            </button>
+            <button aria-label="คุณสมบัติวัตถุ" onClick={onMore}>
+              <MoreHorizontal size={20} />
+            </button>
+          </div>
+        )}
       <div className="canvas-meta">
-        {p.width} × {p.height} px <span>·</span> {p.layers.length} ชั้น
+        {Number(p.width.toFixed(2))} × {Number(p.height.toFixed(2))} หน่วย ·{" "}
+        {p.layers.length} ชั้น
       </div>
       <div className="zoom">
         <button
-          onClick={() => setZoom((z) => Math.max(0.5, z - 0.25))}
-          aria-label="ซูมออก"
+          aria-label="ย้อนกลับบนผืนงาน"
+          disabled={!past.length}
+          onClick={undo}
         >
+          <Undo2 size={15} />
+        </button>
+        <button aria-label="ซูมออก" onClick={() => zoomAt(view.zoom / 1.2)}>
           −
         </button>
-        <button onClick={() => setZoom(1)}>{Math.round(zoom * 100)}%</button>
         <button
-          onClick={() => setZoom((z) => Math.min(2, z + 0.25))}
-          aria-label="ซูมเข้า"
+          title="พอดีหน้าจอ"
+          onClick={() => setView({ zoom: 1, px: 0, py: 0 })}
         >
+          {Math.round(view.zoom * 100)}%
+        </button>
+        <button aria-label="ซูมเข้า" onClick={() => zoomAt(view.zoom * 1.2)}>
           +
         </button>
       </div>
+      {effectiveTool === "pan" && (
+        <div className="pan-label">
+          <Hand size={14} />
+          ลากเพื่อเลื่อนผืนงาน
+        </div>
+      )}
     </div>
   );
 }

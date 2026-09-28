@@ -18,7 +18,13 @@ import * as THREE from "three";
 import { useStudio } from "../store";
 import { rasterLayer, canvasBlob } from "../raster";
 import { download, safeName } from "../io";
-import type { DepthLayer, Project, Assets } from "../model";
+import {
+  outputSize,
+  type DepthLayer,
+  type Project,
+  type Assets,
+} from "../model";
+import { usePreferences } from "../preferences";
 class Boundary extends Component<{ children: ReactNode }, { error: boolean }> {
   state = { error: false };
   static getDerivedStateFromError() {
@@ -82,7 +88,7 @@ function ArtPlane({
     };
   }, [signature, p.width, p.height, max]);
   return tex ? (
-    <mesh position={[0, 0, z]}>
+    <mesh name={"art-" + l.id} position={[0, 0, z]}>
       <planeGeometry args={[w, 3]} />
       <meshBasicMaterial
         map={tex}
@@ -112,6 +118,7 @@ function Scene({
 }) {
   const { project: p, assets } = useStudio();
   const controls = useRef<any>(null);
+  const edge = usePreferences((s) => s.exportEdge);
   const loaded = useRef(new Map<string, string>());
   const { gl, scene, camera, invalidate, size } = useThree();
   const w = (3 * p.width) / p.height;
@@ -152,10 +159,91 @@ function Scene({
         throw new Error(
           "กำลังเตรียมภาพแต่ละชั้น กรุณารอสักครู่แล้วส่งออกอีกครั้ง",
         );
-      gl.render(scene, camera);
-      download(await canvasBlob(gl.domElement), `${safeName(p.name)}-3d.png`);
+      const dims = outputSize({ width: size.width, height: size.height }, edge);
+      if (edge > gl.capabilities.maxTextureSize)
+        throw Error("อุปกรณ์นี้ไม่รองรับขนาดส่งออก กรุณาเลือกความละเอียดต่ำลง");
+      const target = new THREE.WebGLRenderTarget(dims.width, dims.height, {
+        format: THREE.RGBAFormat,
+        type: THREE.UnsignedByteType,
+        samples: 4,
+      });
+      target.texture.colorSpace = THREE.SRGBColorSpace;
+      const previous = gl.getRenderTarget(),
+        viewport = gl.getViewport(new THREE.Vector4()),
+        scissor = gl.getScissor(new THREE.Vector4()),
+        scissorTest = gl.getScissorTest();
+      const replacements: {
+        material: THREE.MeshBasicMaterial;
+        old: THREE.Texture | null;
+        next: THREE.CanvasTexture;
+      }[] = [];
+      const ctrl = controls.current,
+        wasEnabled = ctrl?.enabled,
+        wasAuto = ctrl?.autoRotate;
+      const exportCamera = camera.clone();
+      if (ctrl) {
+        ctrl.enabled = false;
+        ctrl.autoRotate = false;
+      }
+      try {
+        for (const l of p.layers.filter((l) => l.visible)) {
+          const mesh = scene.getObjectByName("art-" + l.id) as
+            THREE.Mesh | undefined;
+          if (!mesh) throw Error("ภาพในพรีวิวยังไม่พร้อม กรุณารอสักครู่");
+          const texture = new THREE.CanvasTexture(
+            await rasterLayer(p, l, assets, edge),
+          );
+          texture.colorSpace = THREE.SRGBColorSpace;
+          texture.anisotropy = 4;
+          const material = mesh.material as THREE.MeshBasicMaterial;
+          replacements.push({ material, old: material.map, next: texture });
+          material.map = texture;
+        }
+        gl.setRenderTarget(target);
+        gl.setScissorTest(false);
+        gl.setViewport(0, 0, dims.width, dims.height);
+        gl.clear();
+        gl.render(scene, exportCamera);
+        const pixels = new Uint8Array(dims.width * dims.height * 4);
+        gl.readRenderTargetPixels(
+          target,
+          0,
+          0,
+          dims.width,
+          dims.height,
+          pixels,
+        );
+        const c = document.createElement("canvas");
+        c.width = dims.width;
+        c.height = dims.height;
+        const ctx = c.getContext("2d")!,
+          data = ctx.createImageData(c.width, c.height),
+          row = c.width * 4;
+        for (let y = 0; y < c.height; y++)
+          data.data.set(
+            pixels.subarray((c.height - 1 - y) * row, (c.height - y) * row),
+            y * row,
+          );
+        ctx.putImageData(data, 0, 0);
+        download(await canvasBlob(c), `${safeName(p.name)}-3d-${edge}.png`);
+      } finally {
+        for (const r of replacements) {
+          r.material.map = r.old;
+          r.next.dispose();
+        }
+        gl.setRenderTarget(previous);
+        gl.setViewport(viewport);
+        gl.setScissor(scissor);
+        gl.setScissorTest(scissorTest);
+        target.dispose();
+        if (ctrl) {
+          ctrl.enabled = wasEnabled;
+          ctrl.autoRotate = wasAuto;
+        }
+        invalidate();
+      }
     });
-  }, [gl, scene, camera, p, onReady]);
+  }, [gl, scene, camera, p, assets, edge, size.width, size.height, onReady]);
   return (
     <>
       <ambientLight intensity={0.9} />
@@ -280,7 +368,19 @@ export default function Preview({ onError }: { onError: (s: string) => void }) {
     [exploded, setExploded] = useState(false),
     [front, setFront] = useState(0),
     [quality, setQuality] = useState("high"),
-    [lost, setLost] = useState(false);
+    [lost, setLost] = useState(false),
+    [exporting, setExporting] = useState(false);
+  const prefs = usePreferences();
+  const wrap = useRef<HTMLDivElement>(null);
+  const [viewport, setViewport] = useState({ width: 1, height: 1 });
+  useEffect(() => {
+    const ro = new ResizeObserver(([e]) =>
+      setViewport({ width: e.contentRect.width, height: e.contentRect.height }),
+    );
+    if (wrap.current) ro.observe(wrap.current);
+    return () => ro.disconnect();
+  }, []);
+  const dims = outputSize(viewport, prefs.exportEdge);
   const exportFn = useRef<() => Promise<void>>(async () => {});
   const ready = useMemo(
     () => (fn: () => Promise<void>) => {
@@ -289,7 +389,7 @@ export default function Preview({ onError }: { onError: (s: string) => void }) {
     [],
   );
   return (
-    <div className="preview-wrap" data-testid="preview">
+    <div className="preview-wrap" ref={wrap} data-testid="preview">
       <Boundary>
         <Canvas
           orthographic
@@ -329,7 +429,11 @@ export default function Preview({ onError }: { onError: (s: string) => void }) {
           การแสดงผล 3D หยุดชั่วคราว กรุณาสลับกลับ 2D แล้วเปิด 3D ใหม่
         </div>
       )}
-      <div className="preview-hint">ลากเพื่อหมุน 360° · เลื่อนเพื่อซูม</div>
+      <div className="preview-hint">
+        ลากเพื่อหมุน 360° · เลื่อนเพื่อซูม
+        <br />
+        ส่งออก {dims.width} × {dims.height} px · ตามกรอบพรีวิว
+      </div>
       <div className="preview-controls">
         <button className={auto ? "active" : ""} onClick={() => setAuto(!auto)}>
           {auto ? "หยุดหมุน" : "หมุนอัตโนมัติ"}
@@ -350,9 +454,19 @@ export default function Preview({ onError }: { onError: (s: string) => void }) {
           <option value="low">ประหยัดพลังงาน</option>
         </select>
         <button
-          onClick={() => exportFn.current().catch((e) => onError(String(e)))}
+          disabled={exporting || lost}
+          onClick={async () => {
+            setExporting(true);
+            try {
+              await exportFn.current();
+            } catch (e) {
+              onError(String(e));
+            } finally {
+              setExporting(false);
+            }
+          }}
         >
-          บันทึกภาพ 3D
+          {exporting ? "กำลังเรนเดอร์…" : "บันทึกภาพ 3D"}
         </button>
       </div>
     </div>

@@ -1,9 +1,11 @@
+import { normalizeStroke } from "./brushes";
 import {
   blank,
   layer,
   baseObject,
   uid,
   distribute,
+  scaleObject,
   type Assets,
 } from "./model";
 // Original geometric artwork. No external images or borrowed character assets.
@@ -108,5 +110,140 @@ export function makeDemo() {
     strokeWidth: 5,
   });
   distribute(p);
+  const k = 100 / Math.max(p.width, p.height);
+  p.layers.forEach((l) => {
+    l.objects = l.objects.map((o) =>
+      scaleObject(o.type === "stroke" ? normalizeStroke(o) : o, k),
+    );
+  });
+  p.width *= k;
+  p.height *= k;
   return { project: p, assets };
+}
+
+export function makeBrushDemo() {
+  const p = blank(100, 120);
+  p.name = "สีและเส้น · Brush collection";
+  p.layers = [
+    layer("01 · พื้นหลังไล่สี"),
+    layer("02 · หัวปากกาหกแบบ"),
+    layer("03 · ตัวอักษร"),
+  ];
+  p.layers[0].objects = [
+    {
+      ...baseObject("background"),
+      width: p.width,
+      height: p.height,
+      fill: "#faf6ef",
+      fill2: "#e0e7ff",
+      backgroundMode: "gradient",
+      gradientAngle: 65,
+    },
+  ];
+  const kinds = [
+    "round",
+    "pencil",
+    "marker",
+    "highlighter",
+    "airbrush",
+    "flat",
+  ] as const;
+  const names = [
+    "ROUND / เส้นเรียบ",
+    "PENCIL / ดินสอ",
+    "MARKER / หัวตัด",
+    "HIGHLIGHTER / โปร่งแสง",
+    "AIRBRUSH / ขอบฟุ้ง",
+    "FLAT / พู่กันแบน",
+  ];
+  const colors = [
+    "#635bda",
+    "#475569",
+    "#db7f70",
+    "#d5a137",
+    "#4c9a96",
+    "#7b62a3",
+  ];
+  kinds.forEach((brushType, i) => {
+    const y = 38 + i * 12;
+    p.layers[1].objects.push(
+      normalizeStroke({
+        ...baseObject("stroke"),
+        points: [
+          37,
+          y + 3,
+          45,
+          y - 1,
+          54,
+          y + 2,
+          64,
+          y - 1,
+          74,
+          y + 2,
+          88,
+          y - 1,
+        ],
+        width: 100,
+        height: 120,
+        fill: colors[i],
+        strokeWidth: brushType === "highlighter" ? 4 : 2.2,
+        brushType,
+        brushVersion: 1,
+        seed: 51 + i,
+        erasures: [],
+      }),
+    );
+    p.layers[2].objects.push({
+      ...baseObject("text"),
+      x: 10,
+      y: y - 0.5,
+      width: 26,
+      height: 8,
+      text: names[i],
+      fontSize: 2.2,
+      fontFamily: "Sarabun",
+      align: "left",
+      fill: "#54536a",
+    });
+  });
+  p.layers[2].objects.push(
+    {
+      ...baseObject("text"),
+      x: 10,
+      y: 8,
+      width: 85,
+      height: 12,
+      text: "Every line, a little story.",
+      fontSize: 5,
+      fontFamily: "Chonburi",
+      align: "left",
+      fill: "#383449",
+    },
+    {
+      ...baseObject("text"),
+      x: 10,
+      y: 23,
+      width: 80,
+      height: 10,
+      text: "ทดลองสีและเส้น ในมิติของคุณ",
+      fontSize: 3.5,
+      fontFamily: "Mali",
+      align: "left",
+      fill: "#635bda",
+    },
+    {
+      ...baseObject("text"),
+      x: 10,
+      y: 109,
+      width: 80,
+      height: 8,
+      text: "ACRYLIC LAYER STUDIO  /  COLLECTION 02",
+      fontSize: 2,
+      fontFamily: "Noto Sans Thai",
+      align: "left",
+      fill: "#777388",
+    },
+  );
+  distribute(p);
+  return { project: p, assets: {} as Assets };
 }

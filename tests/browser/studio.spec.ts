@@ -111,7 +111,7 @@ test("new project ratio, import first image, drawing history and three PNGs", as
     .getByRole("dialog")
     .locator("input[type=file]")
     .setInputFiles(path);
-  await expect(page.getByText("600 × 800", { exact: true })).toBeVisible();
+  await expect(page.getByText("75 × 100", { exact: true })).toBeVisible();
   await page.getByTestId("image-input").setInputFiles([path, path]);
   await expect(page.locator(".layer-card")).toHaveCount(3);
   await page.getByRole("button", { name: "ปากกา", exact: true }).click();

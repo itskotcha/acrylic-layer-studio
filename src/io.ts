@@ -1,3 +1,5 @@
+import { migrateProject } from "./migrate";
+import { ensureFonts, missingFonts } from "./fonts";
 import JSZip from "jszip";
 import { get, set } from "idb-keyval";
 import {
@@ -57,7 +59,11 @@ export function usedAssets(p: Project, a: Assets): Assets {
   );
   return Object.fromEntries([...ids].map((id) => [id, a[id]]));
 }
-export async function packProject(p: Project, assets: Assets) {
+export async function packProject(
+  p: Project,
+  assets: Assets,
+  embedFonts = true,
+) {
   validateProject(p, assets);
   const zip = new JSZip();
   const a = usedAssets(p, assets);
@@ -68,9 +74,17 @@ export async function packProject(p: Project, assets: Assets) {
     zip.file(path, data.split(",")[1], { base64: true });
     manifest[id] = { ...meta, path };
   }
+  const project = structuredClone(p);
+  for (const f of Object.values(project.fonts)) {
+    if (embedFonts && f.data)
+      zip.file(`fonts/${f.id}.${f.extension}`, f.data.split(",")[1], {
+        base64: true,
+      });
+    delete f.data;
+  }
   zip.file(
     "project.json",
-    JSON.stringify({ project: p, assets: manifest }, null, 2),
+    JSON.stringify({ project, assets: manifest }, null, 2),
   );
   return zip.generateAsync({ type: "blob" });
 }
@@ -124,16 +138,29 @@ export async function unpackProject(
       data,
     };
   }
-  validateProject(parsed.project, assets);
-  return { project: parsed.project, assets };
+  const project = migrateProject(parsed.project, assets);
+  for (const f of Object.values(project.fonts)) {
+    const file = zip.file(`fonts/${f.id}.${f.extension}`);
+    if (file) {
+      const bytes = await file.async("uint8array");
+      if (bytes.length > 10e6) throw new Error("ฟอนต์ใหญ่เกิน 10 MB");
+      f.data = await blobData(
+        new Blob([bytes as BlobPart], { type: "application/octet-stream" }),
+      );
+    }
+  }
+  if (!missingFonts(project).length) await ensureFonts(project);
+  return { project, assets };
 }
 export async function saveLocal(p: Project, a: Assets) {
-  await set("acrylic-studio-v1", { project: p, assets: usedAssets(p, a) });
+  await set("acrylic-studio-v2", { project: p, assets: usedAssets(p, a) });
 }
 export async function restoreLocal() {
-  const saved = await get("acrylic-studio-v1");
+  const saved =
+    (await get("acrylic-studio-v2")) || (await get("acrylic-studio-v1"));
   if (saved) {
-    validateProject(saved.project, saved.assets);
+    saved.project = migrateProject(saved.project, saved.assets);
+    await ensureFonts(saved.project);
     return saved as { project: Project; assets: Assets };
   }
   return null;

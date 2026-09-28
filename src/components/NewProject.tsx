@@ -1,12 +1,6 @@
 import { useState } from "react";
 import { X, ImagePlus, Ratio } from "lucide-react";
-import {
-  blank,
-  imageObject,
-  MAX_SIZE,
-  type Project,
-  type Assets,
-} from "../model";
+import { blank, imageObject, type Project, type Assets } from "../model";
 import { readImage } from "../io";
 export default function NewProject({
   onClose,
@@ -17,8 +11,8 @@ export default function NewProject({
   onCreate: (p: Project, a: Assets) => void;
   onError: (s: string) => void;
 }) {
-  const [w, setW] = useState(900),
-    [h, setH] = useState(1200),
+  const [w, setW] = useState(75),
+    [h, setH] = useState(100),
     [busy, setBusy] = useState(false);
   return (
     <div className="modal-backdrop">
@@ -38,7 +32,7 @@ export default function NewProject({
           <div className="new-option">
             <ImagePlus />
             <h3>ตามภาพแรก</h3>
-            <p>ใช้ขนาดและสัดส่วนของภาพที่นำเข้า</p>
+            <p>ใช้สัดส่วนภาพ ด้านยาว 100 หน่วย เก็บต้นฉบับเต็มความละเอียด</p>
             <label className="button primary">
               {busy ? "กำลังอ่านภาพ…" : "เลือกภาพแรก"}
               <input
@@ -52,15 +46,8 @@ export default function NewProject({
                   setBusy(true);
                   try {
                     const a = await readImage(f);
-                    if (
-                      a.width < 64 ||
-                      a.height < 64 ||
-                      Math.max(a.width, a.height) > MAX_SIZE
-                    )
-                      throw new Error(
-                        "ภาพแรกต้องมีแต่ละด้าน 64–4096 px เพื่อใช้ขนาดตรงกับภาพ",
-                      );
-                    const p = blank(a.width, a.height);
+                    const k = 100 / Math.max(a.width, a.height);
+                    const p = blank(a.width * k, a.height * k);
                     p.layers[0].name = "ภาพแรก";
                     p.layers[0].objects = [imageObject(a, p)];
                     onCreate(p, { [a.id]: a });
@@ -89,8 +76,8 @@ export default function NewProject({
                   className={Math.abs(w / h - a / b) < 0.001 ? "active" : ""}
                   key={a + ":" + b}
                   onClick={() => {
-                    setW(a * 100);
-                    setH(b * 100);
+                    setW((a * 100) / Math.max(a, b));
+                    setH((b * 100) / Math.max(a, b));
                   }}
                 >
                   <span
@@ -105,23 +92,23 @@ export default function NewProject({
             </div>
             <div className="field-grid">
               <label className="field">
-                กว้าง (px)
+                กว้าง (หน่วยออกแบบ)
                 <input
                   aria-label="ความกว้างงาน"
                   type="number"
-                  min={64}
-                  max={4096}
+                  min={1}
+                  max={10000}
                   value={w}
                   onChange={(e) => setW(+e.target.value)}
                 />
               </label>
               <label className="field">
-                สูง (px)
+                สูง (หน่วยออกแบบ)
                 <input
                   aria-label="ความสูงงาน"
                   type="number"
-                  min={64}
-                  max={4096}
+                  min={1}
+                  max={10000}
                   value={h}
                   onChange={(e) => setH(+e.target.value)}
                 />
@@ -131,9 +118,7 @@ export default function NewProject({
               className="primary wide"
               disabled={
                 busy ||
-                ![w, h].every(
-                  (n) => Number.isInteger(n) && n >= 64 && n <= 4096,
-                )
+                ![w, h].every((n) => Number.isFinite(n) && n >= 1 && n <= 10000)
               }
               onClick={() => onCreate(blank(w, h), {})}
             >

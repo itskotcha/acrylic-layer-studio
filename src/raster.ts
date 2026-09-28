@@ -1,88 +1,98 @@
 import Konva from "konva";
 import { loadImage, download, safeName } from "./io";
-import type { Project, DepthLayer, Assets } from "./model";
+import {
+  outputSize,
+  type Project,
+  type DepthLayer,
+  type Assets,
+} from "./model";
+import { ensureFonts, fontStyle } from "./fonts";
+import { backgroundAttrs, makeStrokeShape, textRenderAttrs } from "./rendering";
 import JSZip from "jszip";
-// Shared Konva renderer: same primitives and metrics as the interactive editor.
 export async function rasterLayer(
   p: Project,
   l: DepthLayer,
   a: Assets,
-  max = 4096,
+  longEdge = 2048,
 ): Promise<HTMLCanvasElement> {
-  await document.fonts.ready;
-  const scale = Math.min(1, max / Math.max(p.width, p.height));
-  const host = document.createElement("div");
+  await ensureFonts(p);
+  const out = outputSize(p, longEdge),
+    sx = out.width / p.width,
+    sy = out.height / p.height;
   const stage = new Konva.Stage({
-    container: host,
-    width: p.width,
-    height: p.height,
+    container: document.createElement("div"),
+    width: out.width,
+    height: out.height,
   });
-  const layer = new Konva.Layer();
+  const layer = new Konva.Layer({ listening: false });
+  layer.getCanvas().setPixelRatio(1);
+  const group = new Konva.Group({ scaleX: sx, scaleY: sy });
   stage.add(layer);
+  layer.add(group);
   try {
     for (const o of l.objects) {
       const attrs = { ...o, listening: false };
-      if (o.type === "image") {
-        const image = await loadImage(a[o.assetId!].data);
-        layer.add(new Konva.Image({ ...attrs, image }));
-      } else if (o.type === "text") {
-        layer.add(
+      if (o.type === "image")
+        group.add(
+          new Konva.Image({
+            ...attrs,
+            image: await loadImage(a[o.assetId!].data),
+          }),
+        );
+      else if (o.type === "text") {
+        const textGroup = new Konva.Group(attrs);
+        textGroup.add(
           new Konva.Text({
-            ...attrs,
-            text: o.text,
-            fontFamily: o.fontFamily,
-            lineHeight: 1.3,
+            ...textRenderAttrs(o),
+            fontStyle: fontStyle(p, o.fontFamily),
+            listening: false,
           }),
         );
-      } else {
-        layer.add(
-          new Konva.Line({
-            ...attrs,
-            points: o.points,
-            stroke: o.fill,
-            strokeWidth: o.strokeWidth,
-            lineCap: "round",
-            lineJoin: "round",
-            fillEnabled: false,
-            tension: 0,
-          }),
-        );
-      }
+        group.add(textGroup);
+      } else if (o.type === "background")
+        group.add(new Konva.Rect({ ...attrs, ...backgroundAttrs(o) }));
+      else group.add(makeStrokeShape(o, Math.max(sx, sy)));
     }
     layer.draw();
-    return stage.toCanvas({ pixelRatio: scale });
+    return stage.toCanvas({ pixelRatio: 1 });
   } finally {
     stage.destroy();
   }
 }
-export function canvasBlob(c: HTMLCanvasElement) {
-  return new Promise<Blob>((resolve, reject) =>
+export const canvasBlob = (c: HTMLCanvasElement) =>
+  new Promise<Blob>((resolve, reject) =>
     c.toBlob(
       (b) => (b ? resolve(b) : reject(new Error("ส่งออกภาพไม่สำเร็จ"))),
       "image/png",
     ),
   );
-}
-export async function exportFlat(p: Project, a: Assets) {
-  const c = document.createElement("canvas");
-  c.width = p.width;
-  c.height = p.height;
-  const ctx = c.getContext("2d")!;
+export async function flatCanvas(p: Project, a: Assets, edge = 2048) {
+  const out = outputSize(p, edge),
+    c = document.createElement("canvas");
+  c.width = out.width;
+  c.height = out.height;
   for (const l of p.layers)
-    if (l.visible) ctx.drawImage(await rasterLayer(p, l, a), 0, 0);
-  download(await canvasBlob(c), `${safeName(p.name)}-front.png`);
+    if (l.visible)
+      c.getContext("2d")!.drawImage(await rasterLayer(p, l, a, edge), 0, 0);
+  return c;
 }
-export async function exportLayers(p: Project, a: Assets) {
+export async function exportFlat(p: Project, a: Assets, edge = 2048) {
+  download(
+    await canvasBlob(await flatCanvas(p, a, edge)),
+    `${safeName(p.name)}-${edge}-front.png`,
+  );
+}
+export async function exportLayers(p: Project, a: Assets, edge = 2048) {
   const zip = new JSZip();
   for (let i = 0; i < p.layers.length; i++) {
     const l = p.layers[i];
     zip.file(
       `${String(i + 1).padStart(2, "0")}-${safeName(l.name)}.png`,
-      await canvasBlob(await rasterLayer(p, l, a)),
+      await canvasBlob(await rasterLayer(p, l, a, edge)),
     );
   }
   download(
     await zip.generateAsync({ type: "blob" }),
-    `${safeName(p.name)}-layers.zip`,
+    `${safeName(p.name)}-${edge}-layers.zip`,
   );
 }

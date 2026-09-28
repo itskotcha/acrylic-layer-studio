@@ -170,11 +170,14 @@ export default function LayerList({
                   <span>
                     {o.type === "image" ? "▧" : o.type === "text" ? "T" : "〰"}
                   </span>
+                  {o.locked && "🔒 "}
                   {o.type === "text"
                     ? o.text?.slice(0, 24)
                     : o.type === "image"
                       ? "รูปภาพ " + (l.objects.length - i)
-                      : "เส้นวาด"}
+                      : o.type === "background"
+                        ? "แผ่นพื้นหลัง"
+                        : "เส้นวาด"}
                 </button>
               ))}
             </div>

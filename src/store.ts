@@ -90,7 +90,12 @@ export const useStudio = create<State>((set, get) => ({
       const l = p.layers.find((l) => l.id === s.layerId);
       if (l?.locked) return;
       const o = l?.objects.find((o) => o.id === s.objectId);
-      if (o) Object.assign(o, patch);
+      if (
+        o &&
+        (!o.locked ||
+          (Object.keys(patch).length === 1 && patch.locked === false))
+      )
+        Object.assign(o, patch);
     });
   },
   addLayer: () => {
@@ -106,24 +111,35 @@ export const useStudio = create<State>((set, get) => ({
 }));
 export function duplicateObject() {
   const s = useStudio.getState();
+  let newId: string | undefined;
   s.change((p) => {
     const l = p.layers.find((l) => l.id === s.layerId);
     const o = l?.objects.find((o) => o.id === s.objectId);
     if (
       o &&
+      o.type !== "background" &&
       l &&
       !l.locked &&
       p.layers.reduce((n, l) => n + l.objects.length, 0) < 500
-    )
-      l.objects.push({ ...clone(o), id: uid(), x: o.x + 16, y: o.y + 16 });
+    ) {
+      newId = uid();
+      l.objects.push({
+        ...clone(o),
+        id: newId,
+        locked: false,
+        x: o.x + p.width * 0.025,
+        y: o.y + p.height * 0.025,
+      });
+    }
   });
+  if (newId) s.select(s.layerId, newId);
 }
 export function deleteObject() {
   const s = useStudio.getState();
   s.change((p) => {
     const l = p.layers.find((l) => l.id === s.layerId);
     if (l && !l.locked)
-      l.objects = l.objects.filter((o) => o.id !== s.objectId);
+      l.objects = l.objects.filter((o) => o.id !== s.objectId || o.locked);
   });
   s.select(s.layerId);
 }
